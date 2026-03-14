@@ -21,10 +21,18 @@
     width: 100%; height: 100%;
     z-index: 0;
   }
-  #svg-layer path {
+  #svg-layer path.visible {
     fill: none;
     stroke: #fff;
     stroke-width: 4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    pointer-events: none;
+  }
+  #svg-layer path.hit-target {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 24;
     stroke-linecap: round;
     stroke-linejoin: round;
     pointer-events: stroke;
@@ -80,7 +88,9 @@
 
   let startX, startY;
   let isDragging = false;
+  let currentGroup = null;
   let currentPath = null;
+  let currentHitPath = null;
   let points = [];
   let selectedStroke = null;
   let selectionBox = null;
@@ -174,13 +184,7 @@
     scaleX = Math.max(0.1, scaleX);
     scaleY = Math.max(0.1, scaleY);
 
-    var g = selectedStroke.parentNode;
-    if (g.tagName !== 'g') {
-      var wrapper = document.createElementNS(svgNS, 'g');
-      g.replaceChild(wrapper, selectedStroke);
-      wrapper.appendChild(selectedStroke);
-      g = wrapper;
-    }
+    var g = selectedStroke.closest('g');
 
     var ox = resizeOrigin.x;
     var oy = resizeOrigin.y;
@@ -215,24 +219,20 @@
       document.activeElement.blur();
     }
 
-    var pathEl = e.target;
+    var group = e.target.parentNode;
+    var pathEl = group.querySelector('path.visible');
+    if (!pathEl) return;
 
     if (selectedStroke === pathEl) {
       movingStroke = true;
       moveStrokeStart = { x: e.clientX, y: e.clientY };
 
-      var g = pathEl.parentNode;
-      if (g.tagName === 'g') {
-        var t = g.getAttribute('transform') || '';
-        var match = t.match(/translate\(([^,]+),([^)]+)\)/);
-        if (match) {
-          moveStrokeOrigTranslate = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
-        } else {
-          moveStrokeOrigTranslate = { x: 0, y: 0 };
-        }
-      } else {
-        moveStrokeOrigTranslate = { x: 0, y: 0 };
-      }
+      var g = pathEl.closest('g');
+      var t = g ? (g.getAttribute('transform') || '') : '';
+      var match = t.match(/translate\(([^,]+),([^)]+)\)/);
+      moveStrokeOrigTranslate = match
+        ? { x: parseFloat(match[1]), y: parseFloat(match[2]) }
+        : { x: 0, y: 0 };
       return;
     }
 
@@ -245,13 +245,7 @@
     var dx = e.clientX - moveStrokeStart.x;
     var dy = e.clientY - moveStrokeStart.y;
 
-    var g = selectedStroke.parentNode;
-    if (g.tagName !== 'g') {
-      var wrapper = document.createElementNS(svgNS, 'g');
-      g.replaceChild(wrapper, selectedStroke);
-      wrapper.appendChild(selectedStroke);
-      g = wrapper;
-    }
+    var g = selectedStroke.closest('g');
 
     var tx = moveStrokeOrigTranslate.x + dx;
     var ty = moveStrokeOrigTranslate.y + dy;
@@ -264,13 +258,11 @@
     if (movingStroke) {
       movingStroke = false;
       if (selectedStroke) {
-        var g = selectedStroke.parentNode;
-        if (g.tagName === 'g') {
-          var t = g.getAttribute('transform') || '';
-          var match = t.match(/translate\(([^,]+),([^)]+)\)/);
-          if (match) {
-            moveStrokeOrigTranslate = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
-          }
+        var g = selectedStroke.closest('g');
+        var t = g ? (g.getAttribute('transform') || '') : '';
+        var match = t.match(/translate\(([^,]+),([^)]+)\)/);
+        if (match) {
+          moveStrokeOrigTranslate = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
         }
       }
     }
@@ -285,12 +277,9 @@
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      var parent = selectedStroke.parentNode;
-      if (parent.tagName === 'g') {
-        parent.remove();
-      } else {
-        selectedStroke.remove();
-      }
+      var group = selectedStroke.closest('g');
+      if (group) group.remove();
+      else selectedStroke.remove();
       deselectStroke();
     }
   });
@@ -384,7 +373,9 @@
     startX = e.clientX;
     startY = e.clientY;
     isDragging = false;
+    currentGroup = null;
     currentPath = null;
+    currentHitPath = null;
     points = [{ x: e.clientX, y: e.clientY }];
 
     deselectStroke();
@@ -395,11 +386,19 @@
         isDragging = true;
         points.push({ x: me.clientX, y: me.clientY });
 
-        if (!currentPath) {
+        if (!currentGroup) {
+          currentGroup = document.createElementNS(svgNS, 'g');
+          currentHitPath = document.createElementNS(svgNS, 'path');
+          currentHitPath.classList.add('hit-target');
           currentPath = document.createElementNS(svgNS, 'path');
-          svgLayer.appendChild(currentPath);
+          currentPath.classList.add('visible');
+          currentGroup.appendChild(currentHitPath);
+          currentGroup.appendChild(currentPath);
+          svgLayer.appendChild(currentGroup);
         }
-        currentPath.setAttribute('d', buildPathD(points));
+        var d = buildPathD(points);
+        currentPath.setAttribute('d', d);
+        currentHitPath.setAttribute('d', d);
       }
     }
 
@@ -409,11 +408,13 @@
 
       if (!isDragging) {
         createTextBlock(startX, startY);
-      } else if (currentPath && points.length < 3) {
-        currentPath.remove();
+      } else if (currentGroup && points.length < 3) {
+        currentGroup.remove();
       }
 
+      currentGroup = null;
       currentPath = null;
+      currentHitPath = null;
       points = [];
       isDragging = false;
     }
