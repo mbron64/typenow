@@ -14,7 +14,7 @@
 
 <img width="600" alt="typenow demo" src="typenowgif.gif">
 
-*No accounts. No formatting. No distractions. Just you and your thoughts.*
+*No accounts. No toolbars. No distractions. Just you and your thoughts.*
 
 </div>
 
@@ -22,20 +22,19 @@
 
 ## What is this?
 
-typenow is a deliberately minimal writing surface. It's a fullscreen black canvas where the only interaction is: **click somewhere, then type**.
-
-Every click places a new independent text block at that exact position. That's it. There are no toolbars, no menus, no save buttons, no settings. The constraint is the feature.
+typenow is a deliberately minimal creative canvas. Click to type. Drag to draw. Move and resize anything. There are no toolbars, no menus, no save buttons, no settings. The constraint is the feature.
 
 ### Use it for
 
 - Braindumps and stream-of-consciousness writing
+- Freehand sketching and visual thinking
 - Spatial note-taking and mind mapping
 - Poetry and creative layout experiments
-- Thinking out loud without the overhead of an app
+- Whiteboarding without the clutter
 
 ## Try it
 
-**[typenow.web.app](https://typenow.web.app)** -- open it and start clicking.
+**[typenow.web.app](https://typenow.web.app)** -- open it and start creating.
 
 Or run it locally:
 
@@ -49,14 +48,18 @@ That's it. No install, no build step, no dependencies.
 
 ## How it works
 
-The entire app is a single `index.html` file -- **60 lines** of vanilla HTML, CSS, and JavaScript.
+The entire app is a single `index.html` file of vanilla HTML, CSS, and JavaScript.
 
-| Click on the black screen | A `contenteditable` div is created at your cursor position |
+| Action | What happens |
 |---|---|
-| Start typing | Text appears in white monospace, wrapping at the viewport edge |
-| Click somewhere else | A new independent text block begins there |
-| Click into existing text | Resume editing that block |
-| Leave a block empty | It's automatically cleaned up on blur |
+| Click on empty space | A text block is created -- start typing |
+| Click-drag on empty space | Draw a freehand stroke |
+| Click on existing text | Resume editing that block |
+| Click near caret, then click again | Select the text block (resize/move handles appear) |
+| Click on a drawing | Select it (resize/move handles appear) |
+| Drag corner handles | Resize drawings or change text font size |
+| Cmd+Z / Cmd+Shift+Z | Undo / redo everything |
+| Delete / Backspace | Remove selected element |
 
 ### Tech stack
 
@@ -64,11 +67,11 @@ The entire app is a single `index.html` file -- **60 lines** of vanilla HTML, CS
 index.html   ← the entire app
 ```
 
-No frameworks. No bundlers. No transpilers. No node_modules.
+No frameworks. No bundlers. No transpilers. No node_modules. Zero dependencies.
 
 ## Contributing
 
-Contributions are welcome. typenow's philosophy is radical simplicity -- any PR should make the experience better without making it more complex.
+Contributions are welcome. typenow's philosophy is radical simplicity -- every feature should feel invisible until you need it.
 
 1. Fork the repo
 2. Create your branch (`git checkout -b feature/your-idea`)
@@ -78,11 +81,11 @@ Contributions are welcome. typenow's philosophy is radical simplicity -- any PR 
 
 ### Ideas welcome
 
-- Touch/mobile support improvements
-- Keyboard shortcuts (e.g. clear screen)
+- Touch/mobile and stylus support
 - Persistence via localStorage
+- Export to image/PDF
 - Customizable colors/fonts via URL params
-- Export to image
+- Collaboration via WebRTC
 
 Open an [issue](https://github.com/mbron64/typenow/issues) to discuss before building anything large.
 
