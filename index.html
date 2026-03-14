@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Whiteboard</title>
+<style>
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #000;
+    cursor: text;
+  }
+  .text-block {
+    position: absolute;
+    color: #fff;
+    font-family: monospace;
+    font-size: 16px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    outline: none;
+    caret-color: #fff;
+    min-width: 1px;
+    min-height: 1em;
+  }
+</style>
+</head>
+<body>
+<script>
+  document.body.addEventListener('mousedown', function (e) {
+    if (e.target.classList.contains('text-block')) return;
+
+    const block = document.createElement('div');
+    block.className = 'text-block';
+    block.contentEditable = 'true';
+    block.style.left = e.clientX + 'px';
+    block.style.top = e.clientY + 'px';
+    block.style.maxWidth = (window.innerWidth - e.clientX - 4) + 'px';
+
+    block.addEventListener('mousedown', function (ev) {
+      ev.stopPropagation();
+    });
+
+    block.addEventListener('blur', function () {
+      if (!block.textContent.trim()) {
+        block.remove();
+      }
+    });
+
+    document.body.appendChild(block);
+    block.focus();
+
+    e.preventDefault();
+  });
+</script>
+</body>
+</html>
