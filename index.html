@@ -95,20 +95,25 @@
     }
   }
 
+  function positionSelectionBox() {
+    if (!selectedStroke || !selectionBox) return;
+    var rect = selectedStroke.getBoundingClientRect();
+    var pad = 2;
+    selectionBox.style.left = (rect.left - pad) + 'px';
+    selectionBox.style.top = (rect.top - pad) + 'px';
+    selectionBox.style.width = (rect.width + pad * 2) + 'px';
+    selectionBox.style.height = (rect.height + pad * 2) + 'px';
+  }
+
   function selectStroke(pathEl) {
     deselectStroke();
     selectedStroke = pathEl;
 
-    const bbox = pathEl.getBBox();
-    const box = document.createElement('div');
+    var box = document.createElement('div');
     box.className = 'selection-box';
-    box.style.left = bbox.x + 'px';
-    box.style.top = bbox.y + 'px';
-    box.style.width = bbox.width + 'px';
-    box.style.height = bbox.height + 'px';
 
     ['nw', 'ne', 'sw', 'se'].forEach(function (corner) {
-      const handle = document.createElement('div');
+      var handle = document.createElement('div');
       handle.className = 'selection-handle ' + corner;
       handle.dataset.corner = corner;
       box.appendChild(handle);
@@ -116,35 +121,7 @@
 
     document.body.appendChild(box);
     selectionBox = box;
-  }
-
-  function updateSelectionBox() {
-    if (!selectedStroke || !selectionBox) return;
-    const bbox = selectedStroke.getBBox();
-    const transform = selectedStroke.parentNode.tagName === 'g'
-      ? selectedStroke.parentNode.getCTM()
-      : null;
-
-    if (transform) {
-      const svgRect = svgLayer.getBoundingClientRect();
-      const pt1 = svgLayer.createSVGPoint();
-      pt1.x = bbox.x; pt1.y = bbox.y;
-      const pt2 = svgLayer.createSVGPoint();
-      pt2.x = bbox.x + bbox.width; pt2.y = bbox.y + bbox.height;
-
-      const t1 = pt1.matrixTransform(transform);
-      const t2 = pt2.matrixTransform(transform);
-
-      selectionBox.style.left = Math.min(t1.x, t2.x) + 'px';
-      selectionBox.style.top = Math.min(t1.y, t2.y) + 'px';
-      selectionBox.style.width = Math.abs(t2.x - t1.x) + 'px';
-      selectionBox.style.height = Math.abs(t2.y - t1.y) + 'px';
-    } else {
-      selectionBox.style.left = bbox.x + 'px';
-      selectionBox.style.top = bbox.y + 'px';
-      selectionBox.style.width = bbox.width + 'px';
-      selectionBox.style.height = bbox.height + 'px';
-    }
+    positionSelectionBox();
   }
 
   // ── Resize Handles ────────────────────────────────────────────────
@@ -213,7 +190,7 @@
       'translate(' + (-ox) + ',' + (-oy) + ')'
     );
 
-    updateSelectionBox();
+    positionSelectionBox();
   });
 
   document.addEventListener('mouseup', function () {
@@ -280,7 +257,7 @@
     var ty = moveStrokeOrigTranslate.y + dy;
     g.setAttribute('transform', 'translate(' + tx + ',' + ty + ')');
 
-    updateSelectionBox();
+    positionSelectionBox();
   });
 
   document.addEventListener('mouseup', function () {
