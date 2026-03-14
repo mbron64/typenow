@@ -12,7 +12,7 @@
 
 <br />
 
-<img width="600" alt="typenow demo" src="https://github.com/user-attachments/assets/placeholder">
+<img width="600" alt="typenow demo" src="typenowgif.gif">
 
 *No accounts. No formatting. No distractions. Just you and your thoughts.*
 
@@ -61,8 +61,7 @@ The entire app is a single `index.html` file -- **60 lines** of vanilla HTML, CS
 ### Tech stack
 
 ```
-index.html      ← the entire app
-firebase.json   ← hosting config
+index.html   ← the entire app
 ```
 
 No frameworks. No bundlers. No transpilers. No node_modules.
