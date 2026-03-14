@@ -2,7 +2,7 @@
 
 # typenow
 
-**A black screen. Click anywhere. Start typing.**
+**A black canvas. Type anywhere. Draw anywhere. Let the ideas flow**
 
 [![Live Demo](https://img.shields.io/badge/demo-typenow.web.app-000000?style=for-the-badge&logoColor=white)](https://typenow.web.app)
 
