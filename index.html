@@ -10,9 +10,10 @@
     width: 100%; height: 100%;
     overflow: hidden;
     background: #000;
-    cursor: text;
+    cursor: default;
     user-select: none;
     -webkit-user-select: none;
+    touch-action: none;
   }
 
   #svg-layer {
@@ -22,8 +23,11 @@
     z-index: 0;
   }
   #svg-layer path.visible {
-    fill: #fff;
-    stroke: none;
+    fill: none;
+    stroke: #fff;
+    stroke-width: 4;
+    stroke-linecap: round;
+    stroke-linejoin: round;
     pointer-events: none;
   }
   #svg-layer path.hit-target {
@@ -41,6 +45,7 @@
     color: #fff;
     font-family: monospace;
     font-size: 16px;
+    cursor: text;
     line-height: 1.4;
     white-space: pre-wrap;
     word-break: break-word;
@@ -71,6 +76,8 @@
   .selection-handle.ne { top: -4px; right: -4px; cursor: nesw-resize; }
   .selection-handle.sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
   .selection-handle.se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+  body.grabbing, body.grabbing * { cursor: grabbing !important; }
+  body.drawing, body.drawing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 21 L3 17 L17 3 L21 7 L7 21 Z' fill='white' stroke='%23888' stroke-width='1' stroke-linejoin='round'/%3E%3Cpath d='M1 23 L3 17 L7 21 Z' fill='%23ccc' stroke='%23888' stroke-width='0.5'/%3E%3Cpath d='M14 6 L18 10' stroke='%23aaa' stroke-width='0.5'/%3E%3C/svg%3E") 1 23, auto !important; }
 </style>
 </head>
 <body>
@@ -78,19 +85,9 @@
 <svg id="svg-layer" xmlns="http://www.w3.org/2000/svg"></svg>
 
 <script type="module">
-import { getStroke } from 'https://esm.sh/perfect-freehand@1.2.2';
-
 const THRESHOLD = 4;
 const svgLayer = document.getElementById('svg-layer');
 const svgNS = 'http://www.w3.org/2000/svg';
-
-const STROKE_OPTIONS = {
-  size: 4,
-  thinning: 0,
-  smoothing: 0.7,
-  streamline: 0.7,
-  simulatePressure: false,
-};
 
 let startX, startY;
 let isDragging = false;
@@ -101,42 +98,99 @@ let points = [];
 let selectedStroke = null;
 let selectionBox = null;
 let undoStack = [];
+let redoStack = [];
+
+function getTransformState(g) {
+  return {
+    tx: parseFloat(g.dataset.tx || 0),
+    ty: parseFloat(g.dataset.ty || 0),
+    sx: parseFloat(g.dataset.sx || 1),
+    sy: parseFloat(g.dataset.sy || 1),
+    sox: parseFloat(g.dataset.sox || 0),
+    soy: parseFloat(g.dataset.soy || 0),
+  };
+}
+
+function applyTransform(g, state) {
+  g.dataset.tx = state.tx;
+  g.dataset.ty = state.ty;
+  g.dataset.sx = state.sx;
+  g.dataset.sy = state.sy;
+  g.dataset.sox = state.sox;
+  g.dataset.soy = state.soy;
+  if (state.sx === 1 && state.sy === 1) {
+    g.setAttribute('transform', 'translate(' + state.tx + ',' + state.ty + ')');
+  } else {
+    g.setAttribute('transform',
+      'translate(' + state.tx + ',' + state.ty + ') ' +
+      'translate(' + state.sox + ',' + state.soy + ') ' +
+      'scale(' + state.sx + ',' + state.sy + ') ' +
+      'translate(' + (-state.sox) + ',' + (-state.soy) + ')'
+    );
+  }
+}
+
+function bakeTransform(g) {
+  var state = getTransformState(g);
+  if (state.tx === 0 && state.ty === 0 && state.sx === 1 && state.sy === 1) return;
+
+  function transformCoord(x, y) {
+    var nx = (x - state.sox) * state.sx + state.sox + state.tx;
+    var ny = (y - state.soy) * state.sy + state.soy + state.ty;
+    return [nx, ny];
+  }
+
+  function transformPathD(d) {
+    return d.replace(/([-\d.]+)\s*,\s*([-\d.]+)/g, function (_, x, y) {
+      var pt = transformCoord(parseFloat(x), parseFloat(y));
+      return pt[0].toFixed(2) + ',' + pt[1].toFixed(2);
+    });
+  }
+
+  var visPath = g.querySelector('path.visible');
+  var hitPath = g.querySelector('path.hit-target');
+  if (visPath) visPath.setAttribute('d', transformPathD(visPath.getAttribute('d')));
+  if (hitPath) hitPath.setAttribute('d', transformPathD(hitPath.getAttribute('d')));
+
+  applyTransform(g, { tx: 0, ty: 0, sx: 1, sy: 1, sox: 0, soy: 0 });
+}
 
 // ── Point pre-filtering ───────────────────────────────────────────
 
-const SMOOTH_WINDOW = 8;
+const SMOOTH_WINDOW = 6;
 
 function smoothPoints(raw) {
-  if (raw.length <= SMOOTH_WINDOW) return raw;
-  var result = raw.slice(0, SMOOTH_WINDOW);
-  for (var i = SMOOTH_WINDOW; i < raw.length; i++) {
+  if (raw.length < 3) return raw;
+  var result = [raw[0]];
+  for (var i = 1; i < raw.length; i++) {
+    var w = Math.min(i, SMOOTH_WINDOW);
     var sx = 0, sy = 0;
-    for (var j = 0; j < SMOOTH_WINDOW; j++) {
+    for (var j = 0; j <= w; j++) {
       sx += raw[i - j][0];
       sy += raw[i - j][1];
     }
-    result.push([sx / SMOOTH_WINDOW, sy / SMOOTH_WINDOW]);
+    result.push([sx / (w + 1), sy / (w + 1)]);
   }
   return result;
 }
 
-// ── perfect-freehand rendering ────────────────────────────────────
+// ── Smooth SVG path builder ───────────────────────────────────────
 
-function getSvgPathFromStroke(pts) {
-  if (pts.length < 4) return '';
-  var avg = function (a, b) { return (a + b) / 2; };
-  var a = pts[0];
-  var b = pts[1];
-  var c = pts[2];
-  var d = 'M' + a[0].toFixed(2) + ',' + a[1].toFixed(2) +
-    ' Q' + b[0].toFixed(2) + ',' + b[1].toFixed(2) +
-    ' ' + avg(b[0], c[0]).toFixed(2) + ',' + avg(b[1], c[1]).toFixed(2) + ' T';
-  for (var i = 2; i < pts.length - 1; i++) {
-    a = pts[i];
-    b = pts[i + 1];
-    d += avg(a[0], b[0]).toFixed(2) + ',' + avg(a[1], b[1]).toFixed(2) + ' ';
+function buildSmoothPath(pts) {
+  if (pts.length < 2) return '';
+  if (pts.length === 2) {
+    return 'M' + pts[0][0].toFixed(2) + ',' + pts[0][1].toFixed(2) +
+      ' L' + pts[1][0].toFixed(2) + ',' + pts[1][1].toFixed(2);
   }
-  d += 'Z';
+  var avg = function (a, b) { return (a + b) / 2; };
+  var d = 'M' + pts[0][0].toFixed(2) + ',' + pts[0][1].toFixed(2);
+  d += ' L' + avg(pts[0][0], pts[1][0]).toFixed(2) + ',' + avg(pts[0][1], pts[1][1]).toFixed(2);
+  for (var i = 1; i < pts.length - 1; i++) {
+    var mid = [avg(pts[i][0], pts[i + 1][0]), avg(pts[i][1], pts[i + 1][1])];
+    d += ' Q' + pts[i][0].toFixed(2) + ',' + pts[i][1].toFixed(2) +
+      ' ' + mid[0].toFixed(2) + ',' + mid[1].toFixed(2);
+  }
+  d += ' L' + pts[pts.length - 1][0].toFixed(2) + ',' + pts[pts.length - 1][1].toFixed(2);
   return d;
 }
 
@@ -195,6 +249,8 @@ let resizeCorner = null;
 let resizeOrigin = {};
 let resizeStartMouse = {};
 let resizeStartBox = {};
+let resizeBaseTranslate = { x: 0, y: 0 };
+let resizeUndoSnapshot = null;
 
 document.addEventListener('mousedown', function (e) {
   if (e.target.classList.contains('selection-handle') && selectedStroke) {
@@ -203,6 +259,19 @@ document.addEventListener('mousedown', function (e) {
     resizing = true;
     resizeCorner = e.target.dataset.corner;
     resizeStartMouse = { x: e.clientX, y: e.clientY };
+
+    var g = selectedStroke.closest('g');
+    var state = getTransformState(g);
+    resizeBaseTranslate = { x: state.tx, y: state.ty };
+
+    var visPath = g.querySelector('path.visible');
+    var hitPath = g.querySelector('path.hit-target');
+    resizeUndoSnapshot = {
+      el: g,
+      visD: visPath ? visPath.getAttribute('d') : '',
+      hitD: hitPath ? hitPath.getAttribute('d') : '',
+      state: JSON.parse(JSON.stringify(state))
+    };
 
     const bbox = selectedStroke.getBBox();
     resizeStartBox = { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
@@ -242,19 +311,33 @@ document.addEventListener('mousemove', function (e) {
 
   var ox = resizeOrigin.x;
   var oy = resizeOrigin.y;
-  g.setAttribute('transform',
-    'translate(' + ox + ',' + oy + ') ' +
-    'scale(' + scaleX + ',' + scaleY + ') ' +
-    'translate(' + (-ox) + ',' + (-oy) + ')'
-  );
+  var newState = {
+    tx: resizeBaseTranslate.x,
+    ty: resizeBaseTranslate.y,
+    sx: scaleX,
+    sy: scaleY,
+    sox: ox,
+    soy: oy
+  };
+  applyTransform(g, newState);
 
   positionSelectionBox();
 });
 
 document.addEventListener('mouseup', function () {
   if (resizing) {
+    if (selectedStroke) {
+      var g = selectedStroke.closest('g');
+      bakeTransform(g);
+      if (resizeUndoSnapshot) {
+        redoStack.length = 0;
+        undoStack.push({ type: 'transform', el: resizeUndoSnapshot.el, visD: resizeUndoSnapshot.visD, hitD: resizeUndoSnapshot.hitD, state: resizeUndoSnapshot.state });
+        resizeUndoSnapshot = null;
+      }
+    }
     resizing = false;
     resizeCorner = null;
+    positionSelectionBox();
   }
 });
 
@@ -263,34 +346,40 @@ document.addEventListener('mouseup', function () {
 let movingStroke = false;
 let moveStrokeStart = {};
 let moveStrokeOrigTranslate = { x: 0, y: 0 };
+let moveUndoSnapshot = null;
 
 svgLayer.addEventListener('mousedown', function (e) {
   if (e.target.tagName !== 'path') return;
-  e.preventDefault();
-  e.stopPropagation();
-
-  if (document.activeElement && document.activeElement.contentEditable === 'true') {
-    document.activeElement.blur();
-  }
 
   var group = e.target.parentNode;
   var pathEl = group.querySelector('path.visible');
   if (!pathEl) return;
 
   if (selectedStroke === pathEl) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (document.activeElement && document.activeElement.contentEditable === 'true') {
+      document.activeElement.blur();
+    }
+
     movingStroke = true;
     moveStrokeStart = { x: e.clientX, y: e.clientY };
+    document.body.classList.add('grabbing');
 
     var g = pathEl.closest('g');
-    var t = g ? (g.getAttribute('transform') || '') : '';
-    var match = t.match(/translate\(([^,]+),([^)]+)\)/);
-    moveStrokeOrigTranslate = match
-      ? { x: parseFloat(match[1]), y: parseFloat(match[2]) }
-      : { x: 0, y: 0 };
-    return;
-  }
+    var state = getTransformState(g);
+    moveStrokeOrigTranslate = { x: state.tx, y: state.ty };
 
-  selectStroke(pathEl);
+    var visPath = g.querySelector('path.visible');
+    var hitPath = g.querySelector('path.hit-target');
+    moveUndoSnapshot = {
+      el: g,
+      visD: visPath ? visPath.getAttribute('d') : '',
+      hitD: hitPath ? hitPath.getAttribute('d') : '',
+      state: JSON.parse(JSON.stringify(state))
+    };
+  }
 });
 
 document.addEventListener('mousemove', function (e) {
@@ -303,7 +392,9 @@ document.addEventListener('mousemove', function (e) {
 
   var tx = moveStrokeOrigTranslate.x + dx;
   var ty = moveStrokeOrigTranslate.y + dy;
-  g.setAttribute('transform', 'translate(' + tx + ',' + ty + ')');
+  var curState = getTransformState(g);
+  var newState = { tx: tx, ty: ty, sx: curState.sx, sy: curState.sy, sox: curState.sox, soy: curState.soy };
+  applyTransform(g, newState);
 
   positionSelectionBox();
 });
@@ -311,34 +402,88 @@ document.addEventListener('mousemove', function (e) {
 document.addEventListener('mouseup', function () {
   if (movingStroke) {
     movingStroke = false;
+    document.body.classList.remove('grabbing');
     if (selectedStroke) {
       var g = selectedStroke.closest('g');
-      var t = g ? (g.getAttribute('transform') || '') : '';
-      var match = t.match(/translate\(([^,]+),([^)]+)\)/);
-      if (match) {
-        moveStrokeOrigTranslate = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
+      bakeTransform(g);
+      if (moveUndoSnapshot) {
+        redoStack.length = 0;
+        undoStack.push({ type: 'transform', el: moveUndoSnapshot.el, visD: moveUndoSnapshot.visD, hitD: moveUndoSnapshot.hitD, state: moveUndoSnapshot.state });
+        moveUndoSnapshot = null;
       }
+      moveStrokeOrigTranslate = { x: 0, y: 0 };
+      positionSelectionBox();
     }
   }
 });
 
 // ── Delete Selected Stroke ────────────────────────────────────────
 
-document.addEventListener('keydown', function (e) {
-  if (document.activeElement && document.activeElement.contentEditable === 'true') return;
+function applyUndoRedo(action) {
+  deselectStroke();
+  if (action.type === 'stroke') {
+    if (action.el.parentNode) action.el.remove();
+    return { type: 'add-stroke', el: action.el };
+  } else if (action.type === 'add-stroke') {
+    svgLayer.appendChild(action.el);
+    return { type: 'stroke', el: action.el };
+  } else if (action.type === 'text') {
+    if (action.el.parentNode) action.el.remove();
+    return { type: 'add-text', el: action.el };
+  } else if (action.type === 'add-text') {
+    document.body.appendChild(action.el);
+    action.el.blur();
+    return { type: 'text', el: action.el };
+  } else if (action.type === 'delete-stroke') {
+    svgLayer.appendChild(action.el);
+    return { type: 'redo-delete', el: action.el };
+  } else if (action.type === 'redo-delete') {
+    if (action.el.parentNode) action.el.remove();
+    return { type: 'delete-stroke', el: action.el };
+  } else if (action.type === 'transform') {
+    var g = action.el;
+    var visPath = g.querySelector('path.visible');
+    var hitPath = g.querySelector('path.hit-target');
+    var curVisD = visPath ? visPath.getAttribute('d') : '';
+    var curHitD = hitPath ? hitPath.getAttribute('d') : '';
+    var curState = JSON.parse(JSON.stringify(getTransformState(g)));
+    if (visPath) visPath.setAttribute('d', action.visD);
+    if (hitPath) hitPath.setAttribute('d', action.hitD);
+    applyTransform(g, action.state);
+    return { type: 'transform', el: g, visD: curVisD, hitD: curHitD, state: curState };
+  } else if (action.type === 'move-text') {
+    var curLeft = parseInt(action.el.style.left);
+    var curTop = parseInt(action.el.style.top);
+    action.el.style.left = action.left + 'px';
+    action.el.style.top = action.top + 'px';
+    action.el.style.maxWidth = (window.innerWidth - action.left - 4) + 'px';
+    return { type: 'move-text', el: action.el, left: curLeft, top: curTop };
+  }
+  return null;
+}
 
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+document.addEventListener('keydown', function (e) {
+  if (document.activeElement && document.activeElement.contentEditable === 'true') {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !document.activeElement.textContent.trim()) {
+      document.activeElement.blur();
+    } else {
+      return;
+    }
+  }
+
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
     e.preventDefault();
     if (!undoStack.length) return;
-    var action = undoStack.pop();
-    deselectStroke();
-    if (action.type === 'stroke' && action.el.parentNode) {
-      action.el.remove();
-    } else if (action.type === 'text' && action.el.parentNode) {
-      action.el.remove();
-    } else if (action.type === 'delete-stroke') {
-      svgLayer.appendChild(action.el);
-    }
+    var reverse = applyUndoRedo(undoStack.pop());
+    if (reverse) redoStack.push(reverse);
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    if (!redoStack.length) return;
+    var reverse = applyUndoRedo(redoStack.pop());
+    if (reverse) undoStack.push(reverse);
     return;
   }
 
@@ -349,6 +494,7 @@ document.addEventListener('keydown', function (e) {
     var group = selectedStroke.closest('g');
     if (group) {
       group.remove();
+      redoStack.length = 0;
       undoStack.push({ type: 'delete-stroke', el: group });
     } else {
       selectedStroke.remove();
@@ -397,6 +543,9 @@ function createTextBlock(x, y) {
       block.style.cursor = '';
       if (!blockDragging) {
         block.focus();
+      } else {
+        redoStack.length = 0;
+        undoStack.push({ type: 'move-text', el: block, left: blockOrigLeft, top: blockOrigTop });
       }
     }
 
@@ -413,17 +562,28 @@ function createTextBlock(x, y) {
   deselectStroke();
   document.body.appendChild(block);
   block.focus();
+  redoStack.length = 0;
   undoStack.push({ type: 'text', el: block });
 }
 
-// ── Main Gesture Handler (body mousedown) ─────────────────────────
+// ── Main Gesture Handler (body pointerdown) ───────────────────────
 
-document.body.addEventListener('mousedown', function (e) {
+document.body.addEventListener('pointerdown', function (e) {
   if (e.target.classList.contains('text-block')) return;
   if (e.target.classList.contains('selection-handle')) return;
-  if (e.target.tagName === 'path') return;
+
+  var clickedPathEl = null;
+  if (e.target.tagName === 'path') {
+    var group = e.target.parentNode;
+    clickedPathEl = group ? group.querySelector('path.visible') : null;
+    if (clickedPathEl && selectedStroke === clickedPathEl) return;
+  }
 
   e.preventDefault();
+
+  if (document.activeElement && document.activeElement.contentEditable === 'true') {
+    document.activeElement.blur();
+  }
 
   startX = e.clientX;
   startY = e.clientY;
@@ -431,7 +591,7 @@ document.body.addEventListener('mousedown', function (e) {
   currentGroup = null;
   currentPath = null;
   currentHitPath = null;
-  points = [[e.clientX, e.clientY]];
+  points = [];
 
   deselectStroke();
 
@@ -439,7 +599,15 @@ document.body.addEventListener('mousedown', function (e) {
     var dist = Math.hypot(me.clientX - startX, me.clientY - startY);
     if (dist > THRESHOLD) {
       isDragging = true;
-      points.push([me.clientX, me.clientY]);
+      document.body.classList.add('drawing');
+
+      var coalesced = (me.getCoalescedEvents && me.getCoalescedEvents()) || [me];
+      for (var ci = 0; ci < coalesced.length; ci++) {
+        var cx = coalesced[ci].clientX, cy = coalesced[ci].clientY;
+        if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 3) {
+          points.push([cx, cy]);
+        }
+      }
 
       if (!currentGroup) {
         currentGroup = document.createElementNS(svgNS, 'g');
@@ -452,23 +620,38 @@ document.body.addEventListener('mousedown', function (e) {
         svgLayer.appendChild(currentGroup);
       }
 
-      var outlinePoints = getStroke(smoothPoints(points), { ...STROKE_OPTIONS, last: false });
-      currentPath.setAttribute('d', getSvgPathFromStroke(outlinePoints));
+      var smoothed = smoothPoints(points);
+      var tip = [me.clientX, me.clientY];
+      var lastSmoothed = smoothed[smoothed.length - 1];
+      if (lastSmoothed && (tip[0] !== lastSmoothed[0] || tip[1] !== lastSmoothed[1])) {
+        smoothed.push(tip);
+      }
+      currentPath.setAttribute('d', buildSmoothPath(smoothed));
       currentHitPath.setAttribute('d', buildHitPathD(points));
     }
   }
 
-  function onUp() {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
+  function onUp(ue) {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
 
     if (!isDragging) {
-      createTextBlock(startX, startY);
+      if (clickedPathEl) {
+        selectStroke(clickedPathEl);
+      } else {
+        createTextBlock(startX, startY);
+      }
     } else if (currentGroup && points.length < 3) {
       currentGroup.remove();
     } else if (currentGroup) {
-      var outlinePoints = getStroke(smoothPoints(points), { ...STROKE_OPTIONS, last: true });
-      currentPath.setAttribute('d', getSvgPathFromStroke(outlinePoints));
+      var smoothed = smoothPoints(points);
+      var tip = [ue.clientX, ue.clientY];
+      var lastSmoothed = smoothed[smoothed.length - 1];
+      if (lastSmoothed && (tip[0] !== lastSmoothed[0] || tip[1] !== lastSmoothed[1])) {
+        smoothed.push(tip);
+      }
+      currentPath.setAttribute('d', buildSmoothPath(smoothed));
+      redoStack.length = 0;
       undoStack.push({ type: 'stroke', el: currentGroup });
     }
 
@@ -477,10 +660,11 @@ document.body.addEventListener('mousedown', function (e) {
     currentHitPath = null;
     points = [];
     isDragging = false;
+    document.body.classList.remove('drawing');
   }
 
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
+  document.addEventListener('pointermove', onMove);
+  document.addEventListener('pointerup', onUp);
 });
 </script>
 </body>
