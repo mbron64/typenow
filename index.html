@@ -234,6 +234,10 @@
     e.preventDefault();
     e.stopPropagation();
 
+    if (document.activeElement && document.activeElement.contentEditable === 'true') {
+      document.activeElement.blur();
+    }
+
     var pathEl = e.target;
 
     if (selectedStroke === pathEl) {
@@ -386,6 +390,7 @@
       }
     });
 
+    deselectStroke();
     document.body.appendChild(block);
     block.focus();
   }
