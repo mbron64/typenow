@@ -72,6 +72,15 @@
     pointer-events: all;
     z-index: 3;
   }
+  .selection-handle::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
   .selection-handle.nw { top: -4px; left: -4px; cursor: nwse-resize; }
   .selection-handle.ne { top: -4px; right: -4px; cursor: nesw-resize; }
   .selection-handle.sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
@@ -253,6 +262,12 @@ function positionSelectionBox() {
   selectionBox.style.height = (rect.height + pad * 2) + 'px';
 }
 
+window.addEventListener('resize', positionSelectionBox);
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', positionSelectionBox);
+  window.visualViewport.addEventListener('scroll', positionSelectionBox);
+}
+
 function selectStroke(pathEl) {
   deselectStroke();
   selectedStroke = pathEl;
@@ -284,7 +299,7 @@ let resizeTextStartFontSize = 16;
 let resizeTextStartDiag = 0;
 let resizeTextUndoSnapshot = null;
 
-document.addEventListener('mousedown', function (e) {
+document.addEventListener('pointerdown', function (e) {
   if (!e.target.classList.contains('selection-handle')) return;
 
   if (selectedStroke) {
@@ -326,7 +341,7 @@ document.addEventListener('mousedown', function (e) {
   }
 }, true);
 
-document.addEventListener('mousemove', function (e) {
+document.addEventListener('pointermove', function (e) {
   if (resizingText && selectedTextBlock) {
     const dx = e.clientX - resizeStartMouse.x;
     const dy = e.clientY - resizeStartMouse.y;
@@ -386,7 +401,7 @@ document.addEventListener('mousemove', function (e) {
   positionSelectionBox();
 });
 
-document.addEventListener('mouseup', function () {
+document.addEventListener('pointerup', function () {
   if (resizingText) {
     if (resizeTextUndoSnapshot && selectedTextBlock) {
       redoStack.length = 0;
@@ -419,7 +434,7 @@ let moveStrokeStart = {};
 let moveStrokeOrigTranslate = { x: 0, y: 0 };
 let moveUndoSnapshot = null;
 
-svgLayer.addEventListener('mousedown', function (e) {
+svgLayer.addEventListener('pointerdown', function (e) {
   if (e.target.tagName !== 'path') return;
 
   var group = e.target.parentNode;
@@ -453,7 +468,7 @@ svgLayer.addEventListener('mousedown', function (e) {
   }
 });
 
-document.addEventListener('mousemove', function (e) {
+document.addEventListener('pointermove', function (e) {
   if (!movingStroke || !selectedStroke) return;
 
   var dx = e.clientX - moveStrokeStart.x;
@@ -470,7 +485,7 @@ document.addEventListener('mousemove', function (e) {
   positionSelectionBox();
 });
 
-document.addEventListener('mouseup', function () {
+document.addEventListener('pointerup', function () {
   if (movingStroke) {
     movingStroke = false;
     document.body.classList.remove('grabbing');
@@ -631,7 +646,7 @@ function createTextBlock(x, y) {
     lastSavedHTML = block.innerHTML;
   });
 
-  block.addEventListener('mousedown', function (ev) {
+  block.addEventListener('pointerdown', function (ev) {
     ev.stopPropagation();
 
     if (block.contentEditable === 'true' && document.activeElement === block) {
@@ -660,21 +675,21 @@ function createTextBlock(x, y) {
       function focMove(fm) {
         if (Math.hypot(fm.clientX - focStartX, fm.clientY - focStartY) > THRESHOLD) {
           focDragged = true;
-          document.removeEventListener('mousemove', focMove);
-          document.removeEventListener('mouseup', focUp);
+          document.removeEventListener('pointermove', focMove);
+          document.removeEventListener('pointerup', focUp);
         }
       }
       function focUp() {
-        document.removeEventListener('mousemove', focMove);
-        document.removeEventListener('mouseup', focUp);
+        document.removeEventListener('pointermove', focMove);
+        document.removeEventListener('pointerup', focUp);
         if (!focDragged) {
           block.blur();
           block.contentEditable = 'false';
           selectTextBlock(block);
         }
       }
-      document.addEventListener('mousemove', focMove);
-      document.addEventListener('mouseup', focUp);
+      document.addEventListener('pointermove', focMove);
+      document.addEventListener('pointerup', focUp);
       return;
     }
 
@@ -695,8 +710,8 @@ function createTextBlock(x, y) {
         }
       }
       function selUp() {
-        document.removeEventListener('mousemove', selMove);
-        document.removeEventListener('mouseup', selUp);
+        document.removeEventListener('pointermove', selMove);
+        document.removeEventListener('pointerup', selUp);
         document.body.classList.remove('grabbing');
         if (!selDragging) {
           lastClickTime = Date.now();
@@ -712,8 +727,8 @@ function createTextBlock(x, y) {
           positionSelectionBox();
         }
       }
-      document.addEventListener('mousemove', selMove);
-      document.addEventListener('mouseup', selUp);
+      document.addEventListener('pointermove', selMove);
+      document.addEventListener('pointerup', selUp);
       return;
     }
 
@@ -737,8 +752,8 @@ function createTextBlock(x, y) {
     }
 
     function onUp() {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onUp);
       document.body.classList.remove('grabbing');
       if (!bDragging) {
         lastClickTime = Date.now();
@@ -754,8 +769,8 @@ function createTextBlock(x, y) {
       }
     }
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
   });
 
   block.addEventListener('blur', function () {
