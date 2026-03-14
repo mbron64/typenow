@@ -37,7 +37,6 @@
     stroke-linecap: round;
     stroke-linejoin: round;
     pointer-events: stroke;
-    cursor: pointer;
   }
 
   .text-block {
@@ -99,6 +98,7 @@ let points = [];
 let selectedStroke = null;
 let selectionBox = null;
 let undoStack = [];
+let redoStack = [];
 
 function getTransformState(g) {
   return {
@@ -128,6 +128,31 @@ function applyTransform(g, state) {
       'translate(' + (-state.sox) + ',' + (-state.soy) + ')'
     );
   }
+}
+
+function bakeTransform(g) {
+  var state = getTransformState(g);
+  if (state.tx === 0 && state.ty === 0 && state.sx === 1 && state.sy === 1) return;
+
+  function transformCoord(x, y) {
+    var nx = (x - state.sox) * state.sx + state.sox + state.tx;
+    var ny = (y - state.soy) * state.sy + state.soy + state.ty;
+    return [nx, ny];
+  }
+
+  function transformPathD(d) {
+    return d.replace(/([-\d.]+)\s*,\s*([-\d.]+)/g, function (_, x, y) {
+      var pt = transformCoord(parseFloat(x), parseFloat(y));
+      return pt[0].toFixed(2) + ',' + pt[1].toFixed(2);
+    });
+  }
+
+  var visPath = g.querySelector('path.visible');
+  var hitPath = g.querySelector('path.hit-target');
+  if (visPath) visPath.setAttribute('d', transformPathD(visPath.getAttribute('d')));
+  if (hitPath) hitPath.setAttribute('d', transformPathD(hitPath.getAttribute('d')));
+
+  applyTransform(g, { tx: 0, ty: 0, sx: 1, sy: 1, sox: 0, soy: 0 });
 }
 
 // ── Point pre-filtering ───────────────────────────────────────────
@@ -225,6 +250,7 @@ let resizeOrigin = {};
 let resizeStartMouse = {};
 let resizeStartBox = {};
 let resizeBaseTranslate = { x: 0, y: 0 };
+let resizeUndoSnapshot = null;
 
 document.addEventListener('mousedown', function (e) {
   if (e.target.classList.contains('selection-handle') && selectedStroke) {
@@ -237,6 +263,15 @@ document.addEventListener('mousedown', function (e) {
     var g = selectedStroke.closest('g');
     var state = getTransformState(g);
     resizeBaseTranslate = { x: state.tx, y: state.ty };
+
+    var visPath = g.querySelector('path.visible');
+    var hitPath = g.querySelector('path.hit-target');
+    resizeUndoSnapshot = {
+      el: g,
+      visD: visPath ? visPath.getAttribute('d') : '',
+      hitD: hitPath ? hitPath.getAttribute('d') : '',
+      state: JSON.parse(JSON.stringify(state))
+    };
 
     const bbox = selectedStroke.getBBox();
     resizeStartBox = { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
@@ -291,8 +326,18 @@ document.addEventListener('mousemove', function (e) {
 
 document.addEventListener('mouseup', function () {
   if (resizing) {
+    if (selectedStroke) {
+      var g = selectedStroke.closest('g');
+      bakeTransform(g);
+      if (resizeUndoSnapshot) {
+        redoStack.length = 0;
+        undoStack.push({ type: 'transform', el: resizeUndoSnapshot.el, visD: resizeUndoSnapshot.visD, hitD: resizeUndoSnapshot.hitD, state: resizeUndoSnapshot.state });
+        resizeUndoSnapshot = null;
+      }
+    }
     resizing = false;
     resizeCorner = null;
+    positionSelectionBox();
   }
 });
 
@@ -301,6 +346,7 @@ document.addEventListener('mouseup', function () {
 let movingStroke = false;
 let moveStrokeStart = {};
 let moveStrokeOrigTranslate = { x: 0, y: 0 };
+let moveUndoSnapshot = null;
 
 svgLayer.addEventListener('mousedown', function (e) {
   if (e.target.tagName !== 'path') return;
@@ -324,6 +370,15 @@ svgLayer.addEventListener('mousedown', function (e) {
     var g = pathEl.closest('g');
     var state = getTransformState(g);
     moveStrokeOrigTranslate = { x: state.tx, y: state.ty };
+
+    var visPath = g.querySelector('path.visible');
+    var hitPath = g.querySelector('path.hit-target');
+    moveUndoSnapshot = {
+      el: g,
+      visD: visPath ? visPath.getAttribute('d') : '',
+      hitD: hitPath ? hitPath.getAttribute('d') : '',
+      state: JSON.parse(JSON.stringify(state))
+    };
   }
 });
 
@@ -350,29 +405,85 @@ document.addEventListener('mouseup', function () {
     document.body.classList.remove('grabbing');
     if (selectedStroke) {
       var g = selectedStroke.closest('g');
-      var state = getTransformState(g);
-      moveStrokeOrigTranslate = { x: state.tx, y: state.ty };
+      bakeTransform(g);
+      if (moveUndoSnapshot) {
+        redoStack.length = 0;
+        undoStack.push({ type: 'transform', el: moveUndoSnapshot.el, visD: moveUndoSnapshot.visD, hitD: moveUndoSnapshot.hitD, state: moveUndoSnapshot.state });
+        moveUndoSnapshot = null;
+      }
+      moveStrokeOrigTranslate = { x: 0, y: 0 };
+      positionSelectionBox();
     }
   }
 });
 
 // ── Delete Selected Stroke ────────────────────────────────────────
 
-document.addEventListener('keydown', function (e) {
-  if (document.activeElement && document.activeElement.contentEditable === 'true') return;
+function applyUndoRedo(action) {
+  deselectStroke();
+  if (action.type === 'stroke') {
+    if (action.el.parentNode) action.el.remove();
+    return { type: 'add-stroke', el: action.el };
+  } else if (action.type === 'add-stroke') {
+    svgLayer.appendChild(action.el);
+    return { type: 'stroke', el: action.el };
+  } else if (action.type === 'text') {
+    if (action.el.parentNode) action.el.remove();
+    return { type: 'add-text', el: action.el };
+  } else if (action.type === 'add-text') {
+    document.body.appendChild(action.el);
+    action.el.blur();
+    return { type: 'text', el: action.el };
+  } else if (action.type === 'delete-stroke') {
+    svgLayer.appendChild(action.el);
+    return { type: 'redo-delete', el: action.el };
+  } else if (action.type === 'redo-delete') {
+    if (action.el.parentNode) action.el.remove();
+    return { type: 'delete-stroke', el: action.el };
+  } else if (action.type === 'transform') {
+    var g = action.el;
+    var visPath = g.querySelector('path.visible');
+    var hitPath = g.querySelector('path.hit-target');
+    var curVisD = visPath ? visPath.getAttribute('d') : '';
+    var curHitD = hitPath ? hitPath.getAttribute('d') : '';
+    var curState = JSON.parse(JSON.stringify(getTransformState(g)));
+    if (visPath) visPath.setAttribute('d', action.visD);
+    if (hitPath) hitPath.setAttribute('d', action.hitD);
+    applyTransform(g, action.state);
+    return { type: 'transform', el: g, visD: curVisD, hitD: curHitD, state: curState };
+  } else if (action.type === 'move-text') {
+    var curLeft = parseInt(action.el.style.left);
+    var curTop = parseInt(action.el.style.top);
+    action.el.style.left = action.left + 'px';
+    action.el.style.top = action.top + 'px';
+    action.el.style.maxWidth = (window.innerWidth - action.left - 4) + 'px';
+    return { type: 'move-text', el: action.el, left: curLeft, top: curTop };
+  }
+  return null;
+}
 
-  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+document.addEventListener('keydown', function (e) {
+  if (document.activeElement && document.activeElement.contentEditable === 'true') {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z') && !document.activeElement.textContent.trim()) {
+      document.activeElement.blur();
+    } else {
+      return;
+    }
+  }
+
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
     e.preventDefault();
     if (!undoStack.length) return;
-    var action = undoStack.pop();
-    deselectStroke();
-    if (action.type === 'stroke' && action.el.parentNode) {
-      action.el.remove();
-    } else if (action.type === 'text' && action.el.parentNode) {
-      action.el.remove();
-    } else if (action.type === 'delete-stroke') {
-      svgLayer.appendChild(action.el);
-    }
+    var reverse = applyUndoRedo(undoStack.pop());
+    if (reverse) redoStack.push(reverse);
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    if (!redoStack.length) return;
+    var reverse = applyUndoRedo(redoStack.pop());
+    if (reverse) undoStack.push(reverse);
     return;
   }
 
@@ -383,6 +494,7 @@ document.addEventListener('keydown', function (e) {
     var group = selectedStroke.closest('g');
     if (group) {
       group.remove();
+      redoStack.length = 0;
       undoStack.push({ type: 'delete-stroke', el: group });
     } else {
       selectedStroke.remove();
@@ -431,6 +543,9 @@ function createTextBlock(x, y) {
       block.style.cursor = '';
       if (!blockDragging) {
         block.focus();
+      } else {
+        redoStack.length = 0;
+        undoStack.push({ type: 'move-text', el: block, left: blockOrigLeft, top: blockOrigTop });
       }
     }
 
@@ -447,6 +562,7 @@ function createTextBlock(x, y) {
   deselectStroke();
   document.body.appendChild(block);
   block.focus();
+  redoStack.length = 0;
   undoStack.push({ type: 'text', el: block });
 }
 
@@ -535,6 +651,7 @@ document.body.addEventListener('pointerdown', function (e) {
         smoothed.push(tip);
       }
       currentPath.setAttribute('d', buildSmoothPath(smoothed));
+      redoStack.length = 0;
       undoStack.push({ type: 'stroke', el: currentGroup });
     }
 
