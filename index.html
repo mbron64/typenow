@@ -22,11 +22,8 @@
     z-index: 0;
   }
   #svg-layer path.visible {
-    fill: none;
-    stroke: #fff;
-    stroke-width: 4;
-    stroke-linecap: round;
-    stroke-linejoin: round;
+    fill: #fff;
+    stroke: none;
     pointer-events: none;
   }
   #svg-layer path.hit-target {
@@ -80,383 +77,393 @@
 
 <svg id="svg-layer" xmlns="http://www.w3.org/2000/svg"></svg>
 
-<script>
-(function () {
-  const THRESHOLD = 4;
-  const svgLayer = document.getElementById('svg-layer');
-  const svgNS = 'http://www.w3.org/2000/svg';
+<script type="module">
+import { getStroke } from 'https://esm.sh/perfect-freehand@1.2.2';
 
-  let startX, startY;
-  let isDragging = false;
-  let currentGroup = null;
-  let currentPath = null;
-  let currentHitPath = null;
-  let points = [];
-  let selectedStroke = null;
-  let selectionBox = null;
-  let undoStack = [];
+const THRESHOLD = 4;
+const svgLayer = document.getElementById('svg-layer');
+const svgNS = 'http://www.w3.org/2000/svg';
 
-  // ── Stroke Selection ──────────────────────────────────────────────
+const STROKE_OPTIONS = {
+  size: 4,
+  thinning: 0,
+  smoothing: 0.5,
+  streamline: 0.5,
+  simulatePressure: false,
+};
 
-  function deselectStroke() {
-    selectedStroke = null;
-    if (selectionBox) {
-      selectionBox.remove();
-      selectionBox = null;
-    }
+let startX, startY;
+let isDragging = false;
+let currentGroup = null;
+let currentPath = null;
+let currentHitPath = null;
+let points = [];
+let selectedStroke = null;
+let selectionBox = null;
+let undoStack = [];
+
+// ── perfect-freehand rendering ────────────────────────────────────
+
+function getSvgPathFromStroke(pts) {
+  if (pts.length < 4) return '';
+  var avg = function (a, b) { return (a + b) / 2; };
+  var a = pts[0];
+  var b = pts[1];
+  var c = pts[2];
+  var d = 'M' + a[0].toFixed(2) + ',' + a[1].toFixed(2) +
+    ' Q' + b[0].toFixed(2) + ',' + b[1].toFixed(2) +
+    ' ' + avg(b[0], c[0]).toFixed(2) + ',' + avg(b[1], c[1]).toFixed(2) + ' T';
+  for (var i = 2; i < pts.length - 1; i++) {
+    a = pts[i];
+    b = pts[i + 1];
+    d += avg(a[0], b[0]).toFixed(2) + ',' + avg(a[1], b[1]).toFixed(2) + ' ';
   }
+  d += 'Z';
+  return d;
+}
 
-  function positionSelectionBox() {
-    if (!selectedStroke || !selectionBox) return;
-    var rect = selectedStroke.getBoundingClientRect();
-    var pad = 2;
-    selectionBox.style.left = (rect.left - pad) + 'px';
-    selectionBox.style.top = (rect.top - pad) + 'px';
-    selectionBox.style.width = (rect.width + pad * 2) + 'px';
-    selectionBox.style.height = (rect.height + pad * 2) + 'px';
+function buildHitPathD(pts) {
+  if (pts.length < 2) return '';
+  var d = 'M' + pts[0][0] + ',' + pts[0][1];
+  for (var i = 1; i < pts.length; i++) {
+    d += ' L' + pts[i][0] + ',' + pts[i][1];
   }
+  return d;
+}
 
-  function selectStroke(pathEl) {
-    deselectStroke();
-    selectedStroke = pathEl;
+// ── Stroke Selection ──────────────────────────────────────────────
 
-    var box = document.createElement('div');
-    box.className = 'selection-box';
-
-    ['nw', 'ne', 'sw', 'se'].forEach(function (corner) {
-      var handle = document.createElement('div');
-      handle.className = 'selection-handle ' + corner;
-      handle.dataset.corner = corner;
-      box.appendChild(handle);
-    });
-
-    document.body.appendChild(box);
-    selectionBox = box;
-    positionSelectionBox();
+function deselectStroke() {
+  selectedStroke = null;
+  if (selectionBox) {
+    selectionBox.remove();
+    selectionBox = null;
   }
+}
 
-  // ── Resize Handles ────────────────────────────────────────────────
+function positionSelectionBox() {
+  if (!selectedStroke || !selectionBox) return;
+  var rect = selectedStroke.getBoundingClientRect();
+  var pad = 2;
+  selectionBox.style.left = (rect.left - pad) + 'px';
+  selectionBox.style.top = (rect.top - pad) + 'px';
+  selectionBox.style.width = (rect.width + pad * 2) + 'px';
+  selectionBox.style.height = (rect.height + pad * 2) + 'px';
+}
 
-  let resizing = false;
-  let resizeCorner = null;
-  let resizeOrigin = {};
-  let resizeStartMouse = {};
-  let resizeStartBox = {};
+function selectStroke(pathEl) {
+  deselectStroke();
+  selectedStroke = pathEl;
 
-  document.addEventListener('mousedown', function (e) {
-    if (e.target.classList.contains('selection-handle') && selectedStroke) {
-      e.preventDefault();
-      e.stopPropagation();
-      resizing = true;
-      resizeCorner = e.target.dataset.corner;
-      resizeStartMouse = { x: e.clientX, y: e.clientY };
+  var box = document.createElement('div');
+  box.className = 'selection-box';
 
-      const bbox = selectedStroke.getBBox();
-      resizeStartBox = { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
-
-      if (resizeCorner === 'nw') resizeOrigin = { x: bbox.x + bbox.width, y: bbox.y + bbox.height };
-      else if (resizeCorner === 'ne') resizeOrigin = { x: bbox.x, y: bbox.y + bbox.height };
-      else if (resizeCorner === 'sw') resizeOrigin = { x: bbox.x + bbox.width, y: bbox.y };
-      else resizeOrigin = { x: bbox.x, y: bbox.y };
-    }
-  }, true);
-
-  document.addEventListener('mousemove', function (e) {
-    if (!resizing || !selectedStroke) return;
-
-    const dx = e.clientX - resizeStartMouse.x;
-    const dy = e.clientY - resizeStartMouse.y;
-
-    let scaleX, scaleY;
-    if (resizeCorner === 'se') {
-      scaleX = (resizeStartBox.w + dx) / resizeStartBox.w;
-      scaleY = (resizeStartBox.h + dy) / resizeStartBox.h;
-    } else if (resizeCorner === 'nw') {
-      scaleX = (resizeStartBox.w - dx) / resizeStartBox.w;
-      scaleY = (resizeStartBox.h - dy) / resizeStartBox.h;
-    } else if (resizeCorner === 'ne') {
-      scaleX = (resizeStartBox.w + dx) / resizeStartBox.w;
-      scaleY = (resizeStartBox.h - dy) / resizeStartBox.h;
-    } else {
-      scaleX = (resizeStartBox.w - dx) / resizeStartBox.w;
-      scaleY = (resizeStartBox.h + dy) / resizeStartBox.h;
-    }
-
-    scaleX = Math.max(0.1, scaleX);
-    scaleY = Math.max(0.1, scaleY);
-
-    var g = selectedStroke.closest('g');
-
-    var ox = resizeOrigin.x;
-    var oy = resizeOrigin.y;
-    g.setAttribute('transform',
-      'translate(' + ox + ',' + oy + ') ' +
-      'scale(' + scaleX + ',' + scaleY + ') ' +
-      'translate(' + (-ox) + ',' + (-oy) + ')'
-    );
-
-    positionSelectionBox();
+  ['nw', 'ne', 'sw', 'se'].forEach(function (corner) {
+    var handle = document.createElement('div');
+    handle.className = 'selection-handle ' + corner;
+    handle.dataset.corner = corner;
+    box.appendChild(handle);
   });
 
-  document.addEventListener('mouseup', function () {
-    if (resizing) {
-      resizing = false;
-      resizeCorner = null;
-    }
-  });
+  document.body.appendChild(box);
+  selectionBox = box;
+  positionSelectionBox();
+}
 
-  // ── Move Selected Stroke ──────────────────────────────────────────
+// ── Resize Handles ────────────────────────────────────────────────
 
-  let movingStroke = false;
-  let moveStrokeStart = {};
-  let moveStrokeOrigTranslate = { x: 0, y: 0 };
+let resizing = false;
+let resizeCorner = null;
+let resizeOrigin = {};
+let resizeStartMouse = {};
+let resizeStartBox = {};
 
-  svgLayer.addEventListener('mousedown', function (e) {
-    if (e.target.tagName !== 'path') return;
+document.addEventListener('mousedown', function (e) {
+  if (e.target.classList.contains('selection-handle') && selectedStroke) {
     e.preventDefault();
     e.stopPropagation();
+    resizing = true;
+    resizeCorner = e.target.dataset.corner;
+    resizeStartMouse = { x: e.clientX, y: e.clientY };
 
-    if (document.activeElement && document.activeElement.contentEditable === 'true') {
-      document.activeElement.blur();
-    }
+    const bbox = selectedStroke.getBBox();
+    resizeStartBox = { x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height };
 
-    var group = e.target.parentNode;
-    var pathEl = group.querySelector('path.visible');
-    if (!pathEl) return;
+    if (resizeCorner === 'nw') resizeOrigin = { x: bbox.x + bbox.width, y: bbox.y + bbox.height };
+    else if (resizeCorner === 'ne') resizeOrigin = { x: bbox.x, y: bbox.y + bbox.height };
+    else if (resizeCorner === 'sw') resizeOrigin = { x: bbox.x + bbox.width, y: bbox.y };
+    else resizeOrigin = { x: bbox.x, y: bbox.y };
+  }
+}, true);
 
-    if (selectedStroke === pathEl) {
-      movingStroke = true;
-      moveStrokeStart = { x: e.clientX, y: e.clientY };
+document.addEventListener('mousemove', function (e) {
+  if (!resizing || !selectedStroke) return;
 
-      var g = pathEl.closest('g');
+  const dx = e.clientX - resizeStartMouse.x;
+  const dy = e.clientY - resizeStartMouse.y;
+
+  let scaleX, scaleY;
+  if (resizeCorner === 'se') {
+    scaleX = (resizeStartBox.w + dx) / resizeStartBox.w;
+    scaleY = (resizeStartBox.h + dy) / resizeStartBox.h;
+  } else if (resizeCorner === 'nw') {
+    scaleX = (resizeStartBox.w - dx) / resizeStartBox.w;
+    scaleY = (resizeStartBox.h - dy) / resizeStartBox.h;
+  } else if (resizeCorner === 'ne') {
+    scaleX = (resizeStartBox.w + dx) / resizeStartBox.w;
+    scaleY = (resizeStartBox.h - dy) / resizeStartBox.h;
+  } else {
+    scaleX = (resizeStartBox.w - dx) / resizeStartBox.w;
+    scaleY = (resizeStartBox.h + dy) / resizeStartBox.h;
+  }
+
+  scaleX = Math.max(0.1, scaleX);
+  scaleY = Math.max(0.1, scaleY);
+
+  var g = selectedStroke.closest('g');
+
+  var ox = resizeOrigin.x;
+  var oy = resizeOrigin.y;
+  g.setAttribute('transform',
+    'translate(' + ox + ',' + oy + ') ' +
+    'scale(' + scaleX + ',' + scaleY + ') ' +
+    'translate(' + (-ox) + ',' + (-oy) + ')'
+  );
+
+  positionSelectionBox();
+});
+
+document.addEventListener('mouseup', function () {
+  if (resizing) {
+    resizing = false;
+    resizeCorner = null;
+  }
+});
+
+// ── Move Selected Stroke ──────────────────────────────────────────
+
+let movingStroke = false;
+let moveStrokeStart = {};
+let moveStrokeOrigTranslate = { x: 0, y: 0 };
+
+svgLayer.addEventListener('mousedown', function (e) {
+  if (e.target.tagName !== 'path') return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  if (document.activeElement && document.activeElement.contentEditable === 'true') {
+    document.activeElement.blur();
+  }
+
+  var group = e.target.parentNode;
+  var pathEl = group.querySelector('path.visible');
+  if (!pathEl) return;
+
+  if (selectedStroke === pathEl) {
+    movingStroke = true;
+    moveStrokeStart = { x: e.clientX, y: e.clientY };
+
+    var g = pathEl.closest('g');
+    var t = g ? (g.getAttribute('transform') || '') : '';
+    var match = t.match(/translate\(([^,]+),([^)]+)\)/);
+    moveStrokeOrigTranslate = match
+      ? { x: parseFloat(match[1]), y: parseFloat(match[2]) }
+      : { x: 0, y: 0 };
+    return;
+  }
+
+  selectStroke(pathEl);
+});
+
+document.addEventListener('mousemove', function (e) {
+  if (!movingStroke || !selectedStroke) return;
+
+  var dx = e.clientX - moveStrokeStart.x;
+  var dy = e.clientY - moveStrokeStart.y;
+
+  var g = selectedStroke.closest('g');
+
+  var tx = moveStrokeOrigTranslate.x + dx;
+  var ty = moveStrokeOrigTranslate.y + dy;
+  g.setAttribute('transform', 'translate(' + tx + ',' + ty + ')');
+
+  positionSelectionBox();
+});
+
+document.addEventListener('mouseup', function () {
+  if (movingStroke) {
+    movingStroke = false;
+    if (selectedStroke) {
+      var g = selectedStroke.closest('g');
       var t = g ? (g.getAttribute('transform') || '') : '';
       var match = t.match(/translate\(([^,]+),([^)]+)\)/);
-      moveStrokeOrigTranslate = match
-        ? { x: parseFloat(match[1]), y: parseFloat(match[2]) }
-        : { x: 0, y: 0 };
-      return;
-    }
-
-    selectStroke(pathEl);
-  });
-
-  document.addEventListener('mousemove', function (e) {
-    if (!movingStroke || !selectedStroke) return;
-
-    var dx = e.clientX - moveStrokeStart.x;
-    var dy = e.clientY - moveStrokeStart.y;
-
-    var g = selectedStroke.closest('g');
-
-    var tx = moveStrokeOrigTranslate.x + dx;
-    var ty = moveStrokeOrigTranslate.y + dy;
-    g.setAttribute('transform', 'translate(' + tx + ',' + ty + ')');
-
-    positionSelectionBox();
-  });
-
-  document.addEventListener('mouseup', function () {
-    if (movingStroke) {
-      movingStroke = false;
-      if (selectedStroke) {
-        var g = selectedStroke.closest('g');
-        var t = g ? (g.getAttribute('transform') || '') : '';
-        var match = t.match(/translate\(([^,]+),([^)]+)\)/);
-        if (match) {
-          moveStrokeOrigTranslate = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
-        }
+      if (match) {
+        moveStrokeOrigTranslate = { x: parseFloat(match[1]), y: parseFloat(match[2]) };
       }
     }
-  });
-
-  // ── Delete Selected Stroke ────────────────────────────────────────
-
-  document.addEventListener('keydown', function (e) {
-    if (document.activeElement && document.activeElement.contentEditable === 'true') return;
-
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-      e.preventDefault();
-      if (!undoStack.length) return;
-      var action = undoStack.pop();
-      deselectStroke();
-      if (action.type === 'stroke' && action.el.parentNode) {
-        action.el.remove();
-      } else if (action.type === 'text' && action.el.parentNode) {
-        action.el.remove();
-      } else if (action.type === 'delete-stroke') {
-        svgLayer.appendChild(action.el);
-      }
-      return;
-    }
-
-    if (!selectedStroke) return;
-
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      e.preventDefault();
-      var group = selectedStroke.closest('g');
-      if (group) {
-        group.remove();
-        undoStack.push({ type: 'delete-stroke', el: group });
-      } else {
-        selectedStroke.remove();
-      }
-      deselectStroke();
-    }
-  });
-
-  // ── Freehand Drawing (SVG path) ───────────────────────────────────
-
-  var MIN_POINT_DIST = 5;
-
-  function buildPathD(pts) {
-    if (pts.length < 2) return '';
-    var d = 'M ' + pts[0].x + ' ' + pts[0].y;
-    if (pts.length === 2) {
-      d += ' L ' + pts[1].x + ' ' + pts[1].y;
-      return d;
-    }
-    var mx = (pts[0].x + pts[1].x) / 2;
-    var my = (pts[0].y + pts[1].y) / 2;
-    d += ' L ' + mx + ' ' + my;
-    for (var i = 1; i < pts.length - 1; i++) {
-      var mx2 = (pts[i].x + pts[i + 1].x) / 2;
-      var my2 = (pts[i].y + pts[i + 1].y) / 2;
-      d += ' Q ' + pts[i].x + ' ' + pts[i].y + ' ' + mx2 + ' ' + my2;
-    }
-    var last = pts[pts.length - 1];
-    d += ' L ' + last.x + ' ' + last.y;
-    return d;
   }
+});
 
-  // ── Text Block Creation ───────────────────────────────────────────
+// ── Delete Selected Stroke ────────────────────────────────────────
 
-  function createTextBlock(x, y) {
-    var block = document.createElement('div');
-    block.className = 'text-block';
-    block.contentEditable = 'true';
-    block.style.left = x + 'px';
-    block.style.top = y + 'px';
-    block.style.maxWidth = (window.innerWidth - x - 4) + 'px';
+document.addEventListener('keydown', function (e) {
+  if (document.activeElement && document.activeElement.contentEditable === 'true') return;
 
-    var blockStartX, blockStartY, blockOrigLeft, blockOrigTop, blockDragging = false;
-
-    block.addEventListener('mousedown', function (ev) {
-      ev.stopPropagation();
-      deselectStroke();
-
-      blockStartX = ev.clientX;
-      blockStartY = ev.clientY;
-      blockOrigLeft = parseInt(block.style.left);
-      blockOrigTop = parseInt(block.style.top);
-      blockDragging = false;
-
-      function onMove(me) {
-        var dist = Math.hypot(me.clientX - blockStartX, me.clientY - blockStartY);
-        if (dist > THRESHOLD) {
-          blockDragging = true;
-          block.blur();
-          block.style.cursor = 'grabbing';
-          block.style.left = (blockOrigLeft + me.clientX - blockStartX) + 'px';
-          block.style.top = (blockOrigTop + me.clientY - blockStartY) + 'px';
-          block.style.maxWidth = (window.innerWidth - parseInt(block.style.left) - 4) + 'px';
-        }
-      }
-
-      function onUp() {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-        block.style.cursor = '';
-        if (!blockDragging) {
-          block.focus();
-        }
-      }
-
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
-    });
-
-    block.addEventListener('blur', function () {
-      if (!block.textContent.trim()) {
-        block.remove();
-      }
-    });
-
-    deselectStroke();
-    document.body.appendChild(block);
-    block.focus();
-    undoStack.push({ type: 'text', el: block });
-  }
-
-  // ── Main Gesture Handler (body mousedown) ─────────────────────────
-
-  document.body.addEventListener('mousedown', function (e) {
-    if (e.target.classList.contains('text-block')) return;
-    if (e.target.classList.contains('selection-handle')) return;
-    if (e.target.tagName === 'path') return;
-
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
     e.preventDefault();
-
-    startX = e.clientX;
-    startY = e.clientY;
-    isDragging = false;
-    currentGroup = null;
-    currentPath = null;
-    currentHitPath = null;
-    points = [{ x: e.clientX, y: e.clientY }];
-
+    if (!undoStack.length) return;
+    var action = undoStack.pop();
     deselectStroke();
+    if (action.type === 'stroke' && action.el.parentNode) {
+      action.el.remove();
+    } else if (action.type === 'text' && action.el.parentNode) {
+      action.el.remove();
+    } else if (action.type === 'delete-stroke') {
+      svgLayer.appendChild(action.el);
+    }
+    return;
+  }
+
+  if (!selectedStroke) return;
+
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    var group = selectedStroke.closest('g');
+    if (group) {
+      group.remove();
+      undoStack.push({ type: 'delete-stroke', el: group });
+    } else {
+      selectedStroke.remove();
+    }
+    deselectStroke();
+  }
+});
+
+// ── Text Block Creation ───────────────────────────────────────────
+
+function createTextBlock(x, y) {
+  var block = document.createElement('div');
+  block.className = 'text-block';
+  block.contentEditable = 'true';
+  block.style.left = x + 'px';
+  block.style.top = y + 'px';
+  block.style.maxWidth = (window.innerWidth - x - 4) + 'px';
+
+  var blockStartX, blockStartY, blockOrigLeft, blockOrigTop, blockDragging = false;
+
+  block.addEventListener('mousedown', function (ev) {
+    ev.stopPropagation();
+    deselectStroke();
+
+    blockStartX = ev.clientX;
+    blockStartY = ev.clientY;
+    blockOrigLeft = parseInt(block.style.left);
+    blockOrigTop = parseInt(block.style.top);
+    blockDragging = false;
 
     function onMove(me) {
-      var dist = Math.hypot(me.clientX - startX, me.clientY - startY);
+      var dist = Math.hypot(me.clientX - blockStartX, me.clientY - blockStartY);
       if (dist > THRESHOLD) {
-        isDragging = true;
-        var last = points[points.length - 1];
-        var pd = Math.hypot(me.clientX - last.x, me.clientY - last.y);
-        if (pd >= MIN_POINT_DIST) {
-          points.push({ x: me.clientX, y: me.clientY });
-        } else {
-          return;
-        }
-
-        if (!currentGroup) {
-          currentGroup = document.createElementNS(svgNS, 'g');
-          currentHitPath = document.createElementNS(svgNS, 'path');
-          currentHitPath.classList.add('hit-target');
-          currentPath = document.createElementNS(svgNS, 'path');
-          currentPath.classList.add('visible');
-          currentGroup.appendChild(currentHitPath);
-          currentGroup.appendChild(currentPath);
-          svgLayer.appendChild(currentGroup);
-        }
-        var d = buildPathD(points);
-        currentPath.setAttribute('d', d);
-        currentHitPath.setAttribute('d', d);
+        blockDragging = true;
+        block.blur();
+        block.style.cursor = 'grabbing';
+        block.style.left = (blockOrigLeft + me.clientX - blockStartX) + 'px';
+        block.style.top = (blockOrigTop + me.clientY - blockStartY) + 'px';
+        block.style.maxWidth = (window.innerWidth - parseInt(block.style.left) - 4) + 'px';
       }
     }
 
     function onUp() {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-
-      if (!isDragging) {
-        createTextBlock(startX, startY);
-      } else if (currentGroup && points.length < 3) {
-        currentGroup.remove();
-      } else if (currentGroup) {
-        undoStack.push({ type: 'stroke', el: currentGroup });
+      block.style.cursor = '';
+      if (!blockDragging) {
+        block.focus();
       }
-
-      currentGroup = null;
-      currentPath = null;
-      currentHitPath = null;
-      points = [];
-      isDragging = false;
     }
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
   });
-})();
+
+  block.addEventListener('blur', function () {
+    if (!block.textContent.trim()) {
+      block.remove();
+    }
+  });
+
+  deselectStroke();
+  document.body.appendChild(block);
+  block.focus();
+  undoStack.push({ type: 'text', el: block });
+}
+
+// ── Main Gesture Handler (body mousedown) ─────────────────────────
+
+document.body.addEventListener('mousedown', function (e) {
+  if (e.target.classList.contains('text-block')) return;
+  if (e.target.classList.contains('selection-handle')) return;
+  if (e.target.tagName === 'path') return;
+
+  e.preventDefault();
+
+  startX = e.clientX;
+  startY = e.clientY;
+  isDragging = false;
+  currentGroup = null;
+  currentPath = null;
+  currentHitPath = null;
+  points = [[e.clientX, e.clientY]];
+
+  deselectStroke();
+
+  function onMove(me) {
+    var dist = Math.hypot(me.clientX - startX, me.clientY - startY);
+    if (dist > THRESHOLD) {
+      isDragging = true;
+      points.push([me.clientX, me.clientY]);
+
+      if (!currentGroup) {
+        currentGroup = document.createElementNS(svgNS, 'g');
+        currentHitPath = document.createElementNS(svgNS, 'path');
+        currentHitPath.classList.add('hit-target');
+        currentPath = document.createElementNS(svgNS, 'path');
+        currentPath.classList.add('visible');
+        currentGroup.appendChild(currentHitPath);
+        currentGroup.appendChild(currentPath);
+        svgLayer.appendChild(currentGroup);
+      }
+
+      var outlinePoints = getStroke(points, { ...STROKE_OPTIONS, last: false });
+      currentPath.setAttribute('d', getSvgPathFromStroke(outlinePoints));
+      currentHitPath.setAttribute('d', buildHitPathD(points));
+    }
+  }
+
+  function onUp() {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+
+    if (!isDragging) {
+      createTextBlock(startX, startY);
+    } else if (currentGroup && points.length < 3) {
+      currentGroup.remove();
+    } else if (currentGroup) {
+      var outlinePoints = getStroke(points, { ...STROKE_OPTIONS, last: true });
+      currentPath.setAttribute('d', getSvgPathFromStroke(outlinePoints));
+      undoStack.push({ type: 'stroke', el: currentGroup });
+    }
+
+    currentGroup = null;
+    currentPath = null;
+    currentHitPath = null;
+    points = [];
+    isDragging = false;
+  }
+
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+});
 </script>
 </body>
 </html>
