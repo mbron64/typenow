@@ -437,7 +437,10 @@ document.body.addEventListener('pointerdown', function (e) {
 
       var coalesced = (me.getCoalescedEvents && me.getCoalescedEvents()) || [me];
       for (var ci = 0; ci < coalesced.length; ci++) {
-        points.push([coalesced[ci].clientX, coalesced[ci].clientY]);
+        var cx = coalesced[ci].clientX, cy = coalesced[ci].clientY;
+        if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 3) {
+          points.push([cx, cy]);
+        }
       }
 
       if (!currentGroup) {
@@ -452,12 +455,17 @@ document.body.addEventListener('pointerdown', function (e) {
       }
 
       var smoothed = smoothPoints(points);
+      var tip = [me.clientX, me.clientY];
+      var lastSmoothed = smoothed[smoothed.length - 1];
+      if (lastSmoothed && (tip[0] !== lastSmoothed[0] || tip[1] !== lastSmoothed[1])) {
+        smoothed.push(tip);
+      }
       currentPath.setAttribute('d', buildSmoothPath(smoothed));
       currentHitPath.setAttribute('d', buildHitPathD(points));
     }
   }
 
-  function onUp() {
+  function onUp(ue) {
     document.removeEventListener('pointermove', onMove);
     document.removeEventListener('pointerup', onUp);
 
@@ -467,6 +475,11 @@ document.body.addEventListener('pointerdown', function (e) {
       currentGroup.remove();
     } else if (currentGroup) {
       var smoothed = smoothPoints(points);
+      var tip = [ue.clientX, ue.clientY];
+      var lastSmoothed = smoothed[smoothed.length - 1];
+      if (lastSmoothed && (tip[0] !== lastSmoothed[0] || tip[1] !== lastSmoothed[1])) {
+        smoothed.push(tip);
+      }
       currentPath.setAttribute('d', buildSmoothPath(smoothed));
       undoStack.push({ type: 'stroke', el: currentGroup });
     }
