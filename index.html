@@ -94,6 +94,7 @@
   let points = [];
   let selectedStroke = null;
   let selectionBox = null;
+  let undoStack = [];
 
   // ── Stroke Selection ──────────────────────────────────────────────
 
@@ -271,15 +272,34 @@
   // ── Delete Selected Stroke ────────────────────────────────────────
 
   document.addEventListener('keydown', function (e) {
-    if (!selectedStroke) return;
-
     if (document.activeElement && document.activeElement.contentEditable === 'true') return;
+
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      e.preventDefault();
+      if (!undoStack.length) return;
+      var action = undoStack.pop();
+      deselectStroke();
+      if (action.type === 'stroke' && action.el.parentNode) {
+        action.el.remove();
+      } else if (action.type === 'text' && action.el.parentNode) {
+        action.el.remove();
+      } else if (action.type === 'delete-stroke') {
+        svgLayer.appendChild(action.el);
+      }
+      return;
+    }
+
+    if (!selectedStroke) return;
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       var group = selectedStroke.closest('g');
-      if (group) group.remove();
-      else selectedStroke.remove();
+      if (group) {
+        group.remove();
+        undoStack.push({ type: 'delete-stroke', el: group });
+      } else {
+        selectedStroke.remove();
+      }
       deselectStroke();
     }
   });
@@ -359,6 +379,7 @@
     deselectStroke();
     document.body.appendChild(block);
     block.focus();
+    undoStack.push({ type: 'text', el: block });
   }
 
   // ── Main Gesture Handler (body mousedown) ─────────────────────────
@@ -410,6 +431,8 @@
         createTextBlock(startX, startY);
       } else if (currentGroup && points.length < 3) {
         currentGroup.remove();
+      } else if (currentGroup) {
+        undoStack.push({ type: 'stroke', el: currentGroup });
       }
 
       currentGroup = null;
