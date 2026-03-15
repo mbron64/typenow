@@ -87,6 +87,10 @@
   .selection-handle.ne { top: -4px; right: -4px; cursor: nesw-resize; }
   .selection-handle.sw { bottom: -4px; left: -4px; cursor: nesw-resize; }
   .selection-handle.se { bottom: -4px; right: -4px; cursor: nwse-resize; }
+  .selection-handle.n { top: -4px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+  .selection-handle.s { bottom: -4px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+  .selection-handle.e { right: -4px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+  .selection-handle.w { left: -4px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
   body.grabbing, body.grabbing * { cursor: grabbing !important; }
   body.drawing, body.drawing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 21 L3 17 L17 3 L21 7 L7 21 Z' fill='white' stroke='%23888' stroke-width='1' stroke-linejoin='round'/%3E%3Cpath d='M1 23 L3 17 L7 21 Z' fill='%23ccc' stroke='%23888' stroke-width='0.5'/%3E%3Cpath d='M14 6 L18 10' stroke='%23aaa' stroke-width='0.5'/%3E%3C/svg%3E") 1 23, auto !important; }
   .select-rect {
@@ -132,6 +136,12 @@ const hintEl = document.getElementById('hint');
 function updateHint() {
   var hasContent = svgLayer.querySelector('g') || document.querySelector('.text-block');
   hintEl.style.opacity = hasContent ? '0' : '1';
+}
+
+function updateTextMaxWidth(block) {
+  if (!block.style.width) {
+    block.style.maxWidth = (window.innerWidth - parseInt(block.style.left) - 4) + 'px';
+  }
 }
 
 let startX, startY;
@@ -261,7 +271,7 @@ function removeSelectionBox() {
   }
 }
 
-function createSelectionBox() {
+function createSelectionBox(isText) {
   removeSelectionBox();
   var box = document.createElement('div');
   box.className = 'selection-box';
@@ -271,6 +281,14 @@ function createSelectionBox() {
     handle.dataset.corner = corner;
     box.appendChild(handle);
   });
+  if (isText) {
+    ['n', 's', 'e', 'w'].forEach(function (edge) {
+      var handle = document.createElement('div');
+      handle.className = 'selection-handle ' + edge;
+      handle.dataset.edge = edge;
+      box.appendChild(handle);
+    });
+  }
   document.body.appendChild(box);
   selectionBox = box;
   return box;
@@ -370,7 +388,7 @@ function selectTextBlock(block) {
   block.contentEditable = 'false';
   block.style.userSelect = 'none';
   block.style.webkitUserSelect = 'none';
-  createSelectionBox();
+  createSelectionBox(true);
   positionSelectionBox();
 }
 
@@ -387,9 +405,45 @@ let resizingText = false;
 let resizeTextStartFontSize = 16;
 let resizeTextStartDiag = 0;
 let resizeTextUndoSnapshot = null;
+let resizeTextAnchor = {};
+let resizingTextEdge = false;
+let resizeEdge = null;
+let resizeEdgeStartMouse = {};
+let resizeEdgeStartRect = {};
+let resizeEdgeUndoSnapshot = null;
 
 document.addEventListener('pointerdown', function (e) {
   if (!e.target.classList.contains('selection-handle')) return;
+
+  if (e.target.dataset.edge && selectedTextBlock) {
+    e.preventDefault();
+    e.stopPropagation();
+    resizingTextEdge = true;
+    resizeEdge = e.target.dataset.edge;
+    resizeEdgeStartMouse = { x: e.clientX, y: e.clientY };
+    var bl = selectedTextBlock;
+    var w = bl.style.width ? parseInt(bl.style.width) : bl.getBoundingClientRect().width;
+    var h = bl.getBoundingClientRect().height;
+    resizeEdgeStartRect = {
+      left: parseInt(bl.style.left),
+      top: parseInt(bl.style.top),
+      width: w,
+      height: h,
+      maxWidth: bl.style.maxWidth || '',
+      explicitHeight: bl.style.height || '',
+      overflow: bl.style.overflow || ''
+    };
+    resizeEdgeUndoSnapshot = {
+      el: bl,
+      left: resizeEdgeStartRect.left,
+      top: resizeEdgeStartRect.top,
+      width: bl.style.width || '',
+      height: bl.style.height || '',
+      maxWidth: bl.style.maxWidth || '',
+      overflow: bl.style.overflow || ''
+    };
+    return;
+  }
 
   if (selectedStroke) {
     e.preventDefault();
@@ -422,24 +476,81 @@ document.addEventListener('pointerdown', function (e) {
     e.preventDefault();
     e.stopPropagation();
     resizingText = true;
+    resizeCorner = e.target.dataset.corner;
     resizeStartMouse = { x: e.clientX, y: e.clientY };
     var rect = selectedTextBlock.getBoundingClientRect();
     resizeTextStartDiag = Math.hypot(rect.width, rect.height);
     resizeTextStartFontSize = parseFloat(window.getComputedStyle(selectedTextBlock).fontSize);
-    resizeTextUndoSnapshot = { el: selectedTextBlock, fontSize: resizeTextStartFontSize };
+    var bl = selectedTextBlock;
+    var origLeft = parseInt(bl.style.left);
+    var origTop = parseInt(bl.style.top);
+    if (resizeCorner === 'nw') resizeTextAnchor = { x: origLeft + rect.width, y: origTop + rect.height };
+    else if (resizeCorner === 'ne') resizeTextAnchor = { x: origLeft, y: origTop + rect.height };
+    else if (resizeCorner === 'sw') resizeTextAnchor = { x: origLeft + rect.width, y: origTop };
+    else resizeTextAnchor = { x: origLeft, y: origTop };
+    resizeTextUndoSnapshot = { el: bl, fontSize: resizeTextStartFontSize, width: bl.style.width || '', maxWidth: bl.style.maxWidth || '', left: origLeft, top: origTop };
   }
 }, true);
 
 document.addEventListener('pointermove', function (e) {
+  if (resizingTextEdge && selectedTextBlock) {
+    const edx = e.clientX - resizeEdgeStartMouse.x;
+    const edy = e.clientY - resizeEdgeStartMouse.y;
+    const s = resizeEdgeStartRect;
+    const bl = selectedTextBlock;
+    if (resizeEdge === 'e') {
+      const nw = Math.max(20, s.width + edx);
+      bl.style.width = nw + 'px';
+      bl.style.maxWidth = nw + 'px';
+    } else if (resizeEdge === 'w') {
+      const nw = Math.max(20, s.width - edx);
+      bl.style.left = (s.left + s.width - nw) + 'px';
+      bl.style.width = nw + 'px';
+      bl.style.maxWidth = nw + 'px';
+    } else if (resizeEdge === 's') {
+      const nh = Math.max(16, s.height + edy);
+      bl.style.height = nh + 'px';
+      bl.style.overflow = 'hidden';
+    } else if (resizeEdge === 'n') {
+      const nh = Math.max(16, s.height - edy);
+      bl.style.top = (s.top + s.height - nh) + 'px';
+      bl.style.height = nh + 'px';
+      bl.style.overflow = 'hidden';
+    }
+    positionSelectionBox();
+    return;
+  }
+
   if (resizingText && selectedTextBlock) {
-    const dx = e.clientX - resizeStartMouse.x;
-    const dy = e.clientY - resizeStartMouse.y;
-    const dragDist = Math.hypot(dx, dy);
-    var sign = (dx + dy) > 0 ? 1 : -1;
+    const tdx = e.clientX - resizeStartMouse.x;
+    const tdy = e.clientY - resizeStartMouse.y;
+    const dragDist = Math.hypot(tdx, tdy);
+    var outward;
+    if (resizeCorner === 'nw') outward = -tdx - tdy;
+    else if (resizeCorner === 'ne') outward = tdx - tdy;
+    else if (resizeCorner === 'sw') outward = -tdx + tdy;
+    else outward = tdx + tdy;
+    var sign = outward > 0 ? 1 : -1;
     var newDiag = resizeTextStartDiag + sign * dragDist;
     var scale = Math.max(0.25, newDiag / resizeTextStartDiag);
     var newSize = Math.max(4, Math.round(resizeTextStartFontSize * scale));
     selectedTextBlock.style.fontSize = newSize + 'px';
+    if (resizeTextUndoSnapshot.width) {
+      var origW = parseInt(resizeTextUndoSnapshot.width);
+      var newW = Math.max(20, Math.round(origW * scale));
+      selectedTextBlock.style.width = newW + 'px';
+      selectedTextBlock.style.maxWidth = newW + 'px';
+    }
+    var newRect = selectedTextBlock.getBoundingClientRect();
+    if (resizeCorner === 'nw') {
+      selectedTextBlock.style.left = (resizeTextAnchor.x - newRect.width) + 'px';
+      selectedTextBlock.style.top = (resizeTextAnchor.y - newRect.height) + 'px';
+    } else if (resizeCorner === 'ne') {
+      selectedTextBlock.style.top = (resizeTextAnchor.y - newRect.height) + 'px';
+    } else if (resizeCorner === 'sw') {
+      selectedTextBlock.style.left = (resizeTextAnchor.x - newRect.width) + 'px';
+    }
+    updateTextMaxWidth(selectedTextBlock);
     positionSelectionBox();
     return;
   }
@@ -491,10 +602,20 @@ document.addEventListener('pointermove', function (e) {
 });
 
 document.addEventListener('pointerup', function () {
+  if (resizingTextEdge) {
+    if (resizeEdgeUndoSnapshot && selectedTextBlock) {
+      redoStack.length = 0;
+      undoStack.push({ type: 'resize-text-box', el: resizeEdgeUndoSnapshot.el, left: resizeEdgeUndoSnapshot.left, top: resizeEdgeUndoSnapshot.top, width: resizeEdgeUndoSnapshot.width, height: resizeEdgeUndoSnapshot.height, maxWidth: resizeEdgeUndoSnapshot.maxWidth, overflow: resizeEdgeUndoSnapshot.overflow });
+    }
+    resizingTextEdge = false;
+    resizeEdge = null;
+    resizeEdgeUndoSnapshot = null;
+    positionSelectionBox();
+  }
   if (resizingText) {
     if (resizeTextUndoSnapshot && selectedTextBlock) {
       redoStack.length = 0;
-      undoStack.push({ type: 'resize-text', el: resizeTextUndoSnapshot.el, fontSize: resizeTextUndoSnapshot.fontSize });
+      undoStack.push({ type: 'resize-text', el: resizeTextUndoSnapshot.el, fontSize: resizeTextUndoSnapshot.fontSize, width: resizeTextUndoSnapshot.width, maxWidth: resizeTextUndoSnapshot.maxWidth, left: resizeTextUndoSnapshot.left, top: resizeTextUndoSnapshot.top });
     }
     resizingText = false;
     resizeTextUndoSnapshot = null;
@@ -631,12 +752,36 @@ function applyUndoRedo(action) {
     var curTop = parseInt(action.el.style.top);
     action.el.style.left = action.left + 'px';
     action.el.style.top = action.top + 'px';
-    action.el.style.maxWidth = (window.innerWidth - action.left - 4) + 'px';
+    updateTextMaxWidth(action.el);
     return { type: 'move-text', el: action.el, left: curLeft, top: curTop };
   } else if (action.type === 'resize-text') {
-    var curSize = parseFloat(action.el.style.fontSize) || 16;
-    action.el.style.fontSize = action.fontSize + 'px';
-    return { type: 'resize-text', el: action.el, fontSize: curSize };
+    var bl = action.el;
+    var curSize = parseFloat(bl.style.fontSize) || 16;
+    var curW = bl.style.width || '';
+    var curMW = bl.style.maxWidth || '';
+    var curLeft = parseInt(bl.style.left);
+    var curTop = parseInt(bl.style.top);
+    bl.style.fontSize = action.fontSize + 'px';
+    if (action.width !== undefined) {
+      bl.style.width = action.width;
+      bl.style.maxWidth = action.maxWidth || '';
+    }
+    if (action.left !== undefined) {
+      bl.style.left = action.left + 'px';
+      bl.style.top = action.top + 'px';
+    }
+    updateTextMaxWidth(bl);
+    return { type: 'resize-text', el: bl, fontSize: curSize, width: curW, maxWidth: curMW, left: curLeft, top: curTop };
+  } else if (action.type === 'resize-text-box') {
+    var bl = action.el;
+    var cur = { el: bl, left: parseInt(bl.style.left), top: parseInt(bl.style.top), width: bl.style.width || '', height: bl.style.height || '', maxWidth: bl.style.maxWidth || '', overflow: bl.style.overflow || '' };
+    bl.style.left = action.left + 'px';
+    bl.style.top = action.top + 'px';
+    bl.style.width = action.width;
+    bl.style.height = action.height;
+    bl.style.maxWidth = action.maxWidth;
+    bl.style.overflow = action.overflow;
+    return { type: 'resize-text-box', el: cur.el, left: cur.left, top: cur.top, width: cur.width, height: cur.height, maxWidth: cur.maxWidth, overflow: cur.overflow };
   } else if (action.type === 'delete-text') {
     document.body.appendChild(action.el);
     return { type: 'redo-delete-text', el: action.el };
@@ -653,7 +798,7 @@ function applyUndoRedo(action) {
         var cL = parseInt(item.el.style.left), cT = parseInt(item.el.style.top);
         item.el.style.left = item.left + 'px';
         item.el.style.top = item.top + 'px';
-        item.el.style.maxWidth = (window.innerWidth - item.left - 4) + 'px';
+        updateTextMaxWidth(item.el);
         return { type: 'text', el: item.el, left: cL, top: cT };
       } else {
         var g = item.el;
@@ -672,11 +817,16 @@ function applyUndoRedo(action) {
       if (item.type === 'text') {
         var cL = parseInt(item.el.style.left), cT = parseInt(item.el.style.top);
         var cFS = parseFloat(item.el.style.fontSize) || 16;
+        var cW = item.el.style.width || '', cH = item.el.style.height || '', cMW = item.el.style.maxWidth || '', cOF = item.el.style.overflow || '';
         item.el.style.left = item.left + 'px';
         item.el.style.top = item.top + 'px';
         item.el.style.fontSize = item.fontSize + 'px';
-        item.el.style.maxWidth = (window.innerWidth - item.left - 4) + 'px';
-        return { type: 'text', el: item.el, left: cL, top: cT, fontSize: cFS };
+        item.el.style.width = item.width || '';
+        item.el.style.height = item.height || '';
+        item.el.style.maxWidth = item.maxWidth || '';
+        item.el.style.overflow = item.overflow || '';
+        updateTextMaxWidth(item.el);
+        return { type: 'text', el: item.el, left: cL, top: cT, fontSize: cFS, width: cW, height: cH, maxWidth: cMW, overflow: cOF };
       } else {
         var g = item.el;
         var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
@@ -862,7 +1012,7 @@ function createTextBlock(x, y) {
           document.body.classList.add('grabbing');
           block.style.left = (selOrigLeft + sm.clientX - selStartX) + 'px';
           block.style.top = (selOrigTop + sm.clientY - selStartY) + 'px';
-          block.style.maxWidth = (window.innerWidth - parseInt(block.style.left) - 4) + 'px';
+          updateTextMaxWidth(block);
           positionSelectionBox();
         }
       }
@@ -903,7 +1053,7 @@ function createTextBlock(x, y) {
         document.body.classList.add('grabbing');
         block.style.left = (bOrigLeft + me.clientX - bStartX) + 'px';
         block.style.top = (bOrigTop + me.clientY - bStartY) + 'px';
-        block.style.maxWidth = (window.innerWidth - parseInt(block.style.left) - 4) + 'px';
+        updateTextMaxWidth(block);
         if (selectedTextBlock === block) positionSelectionBox();
       }
     }
@@ -978,7 +1128,7 @@ document.addEventListener('pointerdown', function (e) {
     multiResizeStartBox = { left: br.left, top: br.top, width: br.width, height: br.height };
     multiResizeSnapshots = multiSelected.map(function (item) {
       if (item.type === 'text') {
-        return { type: 'text', el: item.el, left: parseInt(item.el.style.left), top: parseInt(item.el.style.top), fontSize: parseFloat(item.el.style.fontSize) || 16 };
+        return { type: 'text', el: item.el, left: parseInt(item.el.style.left), top: parseInt(item.el.style.top), fontSize: parseFloat(item.el.style.fontSize) || 16, width: item.el.style.width || '', height: item.el.style.height || '', maxWidth: item.el.style.maxWidth || '', overflow: item.el.style.overflow || '' };
       } else {
         var g = item.el;
         var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
@@ -1015,7 +1165,7 @@ document.addEventListener('pointermove', function (e) {
       if (item.type === 'text') {
         item.el.style.left = (multiMoveSnapshots[i].left + dx) + 'px';
         item.el.style.top = (multiMoveSnapshots[i].top + dy) + 'px';
-        item.el.style.maxWidth = (window.innerWidth - parseInt(item.el.style.left) - 4) + 'px';
+        updateTextMaxWidth(item.el);
       } else {
         var state = getTransformState(item.el);
         var origState = multiMoveSnapshots[i].state;
@@ -1051,7 +1201,16 @@ document.addEventListener('pointermove', function (e) {
         item.el.style.left = Math.round(newLeft) + 'px';
         item.el.style.top = Math.round(newTop) + 'px';
         item.el.style.fontSize = newFS + 'px';
-        item.el.style.maxWidth = (window.innerWidth - Math.round(newLeft) - 4) + 'px';
+        if (snap.width) {
+          var newW = Math.max(20, Math.round(parseInt(snap.width) * scale));
+          item.el.style.width = newW + 'px';
+          item.el.style.maxWidth = newW + 'px';
+        } else {
+          updateTextMaxWidth(item.el);
+        }
+        if (snap.height) {
+          item.el.style.height = Math.max(16, Math.round(parseInt(snap.height) * scale)) + 'px';
+        }
       } else {
         var g = item.el;
         applyTransform(g, { tx: snap.state.tx, ty: snap.state.ty, sx: scale, sy: scale, sox: originX, soy: originY });
