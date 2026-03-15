@@ -696,6 +696,8 @@ let resizeTextStartFontSize = 16;
 let resizeTextStartDiag = 0;
 let resizeTextUndoSnapshot = null;
 let resizeTextAnchor = {};
+let resizeTextStartFlipX = 1;
+let resizeTextStartFlipY = 1;
 let resizingTextEdge = false;
 let resizeEdge = null;
 let resizeEdgeStartMouse = {};
@@ -778,7 +780,9 @@ document.addEventListener('pointerdown', function (e) {
     else if (resizeCorner === 'ne') resizeTextAnchor = { x: origLeft, y: origTop + rect.height };
     else if (resizeCorner === 'sw') resizeTextAnchor = { x: origLeft + rect.width, y: origTop };
     else resizeTextAnchor = { x: origLeft, y: origTop };
-    resizeTextUndoSnapshot = { el: bl, fontSize: resizeTextStartFontSize, width: bl.style.width || '', maxWidth: bl.style.maxWidth || '', left: origLeft, top: origTop };
+    resizeTextUndoSnapshot = { el: bl, fontSize: resizeTextStartFontSize, width: bl.style.width || '', maxWidth: bl.style.maxWidth || '', left: origLeft, top: origTop, transform: bl.style.transform || '' };
+    resizeTextStartFlipX = parseFloat(bl.dataset.flipX || 1);
+    resizeTextStartFlipY = parseFloat(bl.dataset.flipY || 1);
   }
 }, true);
 
@@ -822,7 +826,7 @@ document.addEventListener('pointermove', function (e) {
     else outward = tdx + tdy;
     var sign = outward > 0 ? 1 : -1;
     var newDiag = resizeTextStartDiag + sign * dragDist;
-    var scale = Math.max(0.25, newDiag / resizeTextStartDiag);
+    var scale = Math.abs(newDiag / resizeTextStartDiag);
     var newSize = Math.max(4, Math.round(resizeTextStartFontSize * scale));
     selectedTextBlock.style.fontSize = newSize + 'px';
     if (resizeTextUndoSnapshot.width) {
@@ -831,15 +835,35 @@ document.addEventListener('pointermove', function (e) {
       selectedTextBlock.style.width = newW + 'px';
       selectedTextBlock.style.maxWidth = newW + 'px';
     }
-    var newRect = selectedTextBlock.getBoundingClientRect();
-    if (resizeCorner === 'nw') {
-      selectedTextBlock.style.left = (resizeTextAnchor.x - newRect.width) + 'px';
-      selectedTextBlock.style.top = (resizeTextAnchor.y - newRect.height) + 'px';
-    } else if (resizeCorner === 'ne') {
-      selectedTextBlock.style.top = (resizeTextAnchor.y - newRect.height) + 'px';
-    } else if (resizeCorner === 'sw') {
-      selectedTextBlock.style.left = (resizeTextAnchor.x - newRect.width) + 'px';
+
+    var rawFlipX = 1, rawFlipY = 1;
+    if (resizeCorner === 'se' || resizeCorner === 'ne') {
+      if (e.clientX < resizeTextAnchor.x) rawFlipX = -1;
+    } else {
+      if (e.clientX > resizeTextAnchor.x) rawFlipX = -1;
     }
+    if (resizeCorner === 'se' || resizeCorner === 'sw') {
+      if (e.clientY < resizeTextAnchor.y) rawFlipY = -1;
+    } else {
+      if (e.clientY > resizeTextAnchor.y) rawFlipY = -1;
+    }
+    var flipX = resizeTextStartFlipX * rawFlipX;
+    var flipY = resizeTextStartFlipY * rawFlipY;
+    if (flipX !== 1 || flipY !== 1) {
+      selectedTextBlock.style.transform = 'scale(' + flipX + ',' + flipY + ')';
+    } else {
+      selectedTextBlock.style.transform = '';
+    }
+    selectedTextBlock.dataset.flipX = flipX;
+    selectedTextBlock.dataset.flipY = flipY;
+
+    var newRect = selectedTextBlock.getBoundingClientRect();
+    var handleOnRight = (resizeCorner === 'se' || resizeCorner === 'ne');
+    var handleOnBottom = (resizeCorner === 'se' || resizeCorner === 'sw');
+    var extendsRight = handleOnRight !== (rawFlipX === -1);
+    var extendsDown = handleOnBottom !== (rawFlipY === -1);
+    selectedTextBlock.style.left = (extendsRight ? resizeTextAnchor.x : resizeTextAnchor.x - newRect.width) + 'px';
+    selectedTextBlock.style.top = (extendsDown ? resizeTextAnchor.y : resizeTextAnchor.y - newRect.height) + 'px';
     updateTextMaxWidth(selectedTextBlock);
     positionSelectionBox();
     return;
@@ -865,13 +889,10 @@ document.addEventListener('pointermove', function (e) {
     scaleY = (resizeStartBox.h + dy) / resizeStartBox.h;
   }
 
-  scaleX = Math.max(0.1, scaleX);
-  scaleY = Math.max(0.1, scaleY);
-
   if (e.shiftKey) {
-    var uniform = Math.max(scaleX, scaleY);
-    scaleX = uniform;
-    scaleY = uniform;
+    var avg = (Math.abs(scaleX) + Math.abs(scaleY)) / 2;
+    scaleX = (scaleX < 0 ? -1 : 1) * avg;
+    scaleY = (scaleY < 0 ? -1 : 1) * avg;
   }
 
   var g = selectedStroke.closest('g');
@@ -905,7 +926,7 @@ document.addEventListener('pointerup', function () {
   if (resizingText) {
     if (resizeTextUndoSnapshot && selectedTextBlock) {
       redoStack.length = 0;
-      undoStack.push({ type: 'resize-text', el: resizeTextUndoSnapshot.el, fontSize: resizeTextUndoSnapshot.fontSize, width: resizeTextUndoSnapshot.width, maxWidth: resizeTextUndoSnapshot.maxWidth, left: resizeTextUndoSnapshot.left, top: resizeTextUndoSnapshot.top });
+      undoStack.push({ type: 'resize-text', el: resizeTextUndoSnapshot.el, fontSize: resizeTextUndoSnapshot.fontSize, width: resizeTextUndoSnapshot.width, maxWidth: resizeTextUndoSnapshot.maxWidth, left: resizeTextUndoSnapshot.left, top: resizeTextUndoSnapshot.top, transform: resizeTextUndoSnapshot.transform });
     }
     resizingText = false;
     resizeTextUndoSnapshot = null;
@@ -1017,6 +1038,7 @@ function applyUndoRedo(action) {
     var curMW = bl.style.maxWidth || '';
     var curLeft = parseInt(bl.style.left);
     var curTop = parseInt(bl.style.top);
+    var curTransform = bl.style.transform || '';
     bl.style.fontSize = action.fontSize + 'px';
     if (action.width !== undefined) {
       bl.style.width = action.width;
@@ -1026,8 +1048,17 @@ function applyUndoRedo(action) {
       bl.style.left = action.left + 'px';
       bl.style.top = action.top + 'px';
     }
+    bl.style.transform = action.transform || '';
+    if (action.transform) {
+      var m = action.transform.match(/scale\(([-\d.]+),([-\d.]+)\)/);
+      bl.dataset.flipX = m ? m[1] : 1;
+      bl.dataset.flipY = m ? m[2] : 1;
+    } else {
+      bl.dataset.flipX = 1;
+      bl.dataset.flipY = 1;
+    }
     updateTextMaxWidth(bl);
-    return { type: 'resize-text', el: bl, fontSize: curSize, width: curW, maxWidth: curMW, left: curLeft, top: curTop };
+    return { type: 'resize-text', el: bl, fontSize: curSize, width: curW, maxWidth: curMW, left: curLeft, top: curTop, transform: curTransform };
   } else if (action.type === 'resize-text-box') {
     var bl = action.el;
     var cur = { el: bl, left: parseInt(bl.style.left), top: parseInt(bl.style.top), width: bl.style.width || '', height: bl.style.height || '', maxWidth: bl.style.maxWidth || '', overflow: bl.style.overflow || '' };
@@ -1095,6 +1126,7 @@ function applyUndoRedo(action) {
         var cL = parseInt(item.el.style.left), cT = parseInt(item.el.style.top);
         var cFS = parseFloat(item.el.style.fontSize) || 16;
         var cW = item.el.style.width || '', cH = item.el.style.height || '', cMW = item.el.style.maxWidth || '', cOF = item.el.style.overflow || '';
+        var cFX = parseFloat(item.el.dataset.flipX || 1), cFY = parseFloat(item.el.dataset.flipY || 1);
         item.el.style.left = item.left + 'px';
         item.el.style.top = item.top + 'px';
         item.el.style.fontSize = item.fontSize + 'px';
@@ -1102,8 +1134,16 @@ function applyUndoRedo(action) {
         item.el.style.height = item.height || '';
         item.el.style.maxWidth = item.maxWidth || '';
         item.el.style.overflow = item.overflow || '';
+        var rFX = parseFloat(item.flipX || 1), rFY = parseFloat(item.flipY || 1);
+        if (rFX !== 1 || rFY !== 1) {
+          item.el.style.transform = 'scale(' + rFX + ',' + rFY + ')';
+        } else {
+          item.el.style.transform = '';
+        }
+        item.el.dataset.flipX = rFX;
+        item.el.dataset.flipY = rFY;
         updateTextMaxWidth(item.el);
-        return { type: 'text', el: item.el, left: cL, top: cT, fontSize: cFS, width: cW, height: cH, maxWidth: cMW, overflow: cOF };
+        return { type: 'text', el: item.el, left: cL, top: cT, fontSize: cFS, width: cW, height: cH, maxWidth: cMW, overflow: cOF, flipX: cFX, flipY: cFY };
       } else {
         var g = item.el;
         var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
@@ -1866,7 +1906,7 @@ document.addEventListener('pointerdown', function (e) {
     multiResizeStartBox = { left: br.left, top: br.top, width: br.width, height: br.height };
     multiResizeSnapshots = multiSelected.map(function (item) {
       if (item.type === 'text') {
-        return { type: 'text', el: item.el, left: parseInt(item.el.style.left), top: parseInt(item.el.style.top), fontSize: parseFloat(item.el.style.fontSize) || 16, width: item.el.style.width || '', height: item.el.style.height || '', maxWidth: item.el.style.maxWidth || '', overflow: item.el.style.overflow || '' };
+        return { type: 'text', el: item.el, left: parseInt(item.el.style.left), top: parseInt(item.el.style.top), fontSize: parseFloat(item.el.style.fontSize) || 16, width: item.el.style.width || '', height: item.el.style.height || '', maxWidth: item.el.style.maxWidth || '', overflow: item.el.style.overflow || '', flipX: parseFloat(item.el.dataset.flipX || 1), flipY: parseFloat(item.el.dataset.flipY || 1) };
       } else {
         var g = item.el;
         var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
@@ -1919,10 +1959,10 @@ document.addEventListener('pointermove', function (e) {
     var dy = e.clientY - multiResizeStartMouse.y;
     var sb = multiResizeStartBox;
     var scale;
-    if (multiResizeCorner === 'se') scale = Math.max(0.1, ((sb.width + dx) + (sb.height + dy)) / (sb.width + sb.height));
-    else if (multiResizeCorner === 'nw') scale = Math.max(0.1, ((sb.width - dx) + (sb.height - dy)) / (sb.width + sb.height));
-    else if (multiResizeCorner === 'ne') scale = Math.max(0.1, ((sb.width + dx) + (sb.height - dy)) / (sb.width + sb.height));
-    else scale = Math.max(0.1, ((sb.width - dx) + (sb.height + dy)) / (sb.width + sb.height));
+    if (multiResizeCorner === 'se') scale = ((sb.width + dx) + (sb.height + dy)) / (sb.width + sb.height);
+    else if (multiResizeCorner === 'nw') scale = ((sb.width - dx) + (sb.height - dy)) / (sb.width + sb.height);
+    else if (multiResizeCorner === 'ne') scale = ((sb.width + dx) + (sb.height - dy)) / (sb.width + sb.height);
+    else scale = ((sb.width - dx) + (sb.height + dy)) / (sb.width + sb.height);
 
     var originX, originY;
     if (multiResizeCorner === 'se') { originX = sb.left; originY = sb.top; }
@@ -1933,21 +1973,37 @@ document.addEventListener('pointermove', function (e) {
     multiSelected.forEach(function (item, i) {
       var snap = multiResizeSnapshots[i];
       if (item.type === 'text') {
+        var absScale = Math.abs(scale);
         var newLeft = originX + (snap.left - originX) * scale;
         var newTop = originY + (snap.top - originY) * scale;
-        var newFS = Math.max(4, Math.round(snap.fontSize * scale));
+        var newFS = Math.max(4, Math.round(snap.fontSize * absScale));
         item.el.style.left = Math.round(newLeft) + 'px';
         item.el.style.top = Math.round(newTop) + 'px';
         item.el.style.fontSize = newFS + 'px';
         if (snap.width) {
-          var newW = Math.max(20, Math.round(parseInt(snap.width) * scale));
+          var newW = Math.max(20, Math.round(parseInt(snap.width) * absScale));
           item.el.style.width = newW + 'px';
           item.el.style.maxWidth = newW + 'px';
         } else {
           updateTextMaxWidth(item.el);
         }
         if (snap.height) {
-          item.el.style.height = Math.max(16, Math.round(parseInt(snap.height) * scale)) + 'px';
+          item.el.style.height = Math.max(16, Math.round(parseInt(snap.height) * absScale)) + 'px';
+        }
+        if (scale < 0) {
+          item.el.style.transform = 'scale(-1,-1)';
+          item.el.dataset.flipX = -1;
+          item.el.dataset.flipY = -1;
+        } else {
+          var prevFlipX = parseFloat(snap.flipX || 1);
+          var prevFlipY = parseFloat(snap.flipY || 1);
+          if (prevFlipX !== 1 || prevFlipY !== 1) {
+            item.el.style.transform = 'scale(' + prevFlipX + ',' + prevFlipY + ')';
+          } else {
+            item.el.style.transform = '';
+          }
+          item.el.dataset.flipX = prevFlipX;
+          item.el.dataset.flipY = prevFlipY;
         }
       } else {
         var g = item.el;
