@@ -69,6 +69,8 @@ The entire app is a single `index.html` file of vanilla HTML, CSS, and JavaScrip
 | Cmd+C / Ctrl+C | Copy selected element(s) |
 | Cmd+V / Ctrl+V | Paste at cursor position or with offset |
 | Arrow keys | Nudge selected element by 1px (hold Shift for 10px) |
+| Cmd+Arrow Up/Down | Move selected element one layer forward / backward |
+| Cmd+Shift+Arrow Up/Down | Move selected element to front / back |
 | Cmd+L / Ctrl+L | Toggle light mode |
 | Cmd+S / Ctrl+S | Save and download the canvas as a working HTML file |
 | Cmd+O / Ctrl+O | Open a previously saved widyo file |

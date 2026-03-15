@@ -16,13 +16,13 @@
     touch-action: none;
   }
 
-  #svg-layer {
+  .drawing-layer {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    z-index: 0;
+    pointer-events: none;
   }
-  #svg-layer path.visible {
+  .drawing-layer path.visible {
     fill: none;
     stroke: #fff;
     stroke-width: 4;
@@ -30,7 +30,7 @@
     stroke-linejoin: round;
     pointer-events: none;
   }
-  #svg-layer path.hit-target {
+  .drawing-layer path.hit-target {
     fill: none;
     stroke: transparent;
     stroke-width: 24;
@@ -41,7 +41,6 @@
 
   .text-block {
     position: absolute;
-    z-index: 1;
     color: #fff;
     font-family: monospace;
     font-size: 16px;
@@ -151,7 +150,7 @@
   /* ── Light mode overrides ─────────────────────────────────── */
   body.light-mode { background: #fff; }
   body.light-mode .text-block { color: #000; caret-color: #000; }
-  body.light-mode #svg-layer path.visible { stroke: #000; }
+  body.light-mode .drawing-layer path.visible { stroke: #000; }
   body.light-mode .selection-box,
   body.light-mode .select-rect,
   body.light-mode .multi-select-box { border-color: rgba(0, 0, 0, 0.6); }
@@ -164,16 +163,31 @@
 <body>
 
 <div id="hint">click anywhere to type<br>drag anywhere to draw</div>
-<svg id="svg-layer" xmlns="http://www.w3.org/2000/svg"></svg>
 
 <script type="module">
 const THRESHOLD = 4;
-const svgLayer = document.getElementById('svg-layer');
 const svgNS = 'http://www.w3.org/2000/svg';
 const hintEl = document.getElementById('hint');
 
+function addStrokeToDOM(g) {
+  if (g.parentNode && g.parentNode.classList && g.parentNode.classList.contains('drawing-layer')) {
+    document.body.appendChild(g.parentNode);
+  } else {
+    var svg = document.createElementNS(svgNS, 'svg');
+    svg.classList.add('drawing-layer');
+    svg.appendChild(g);
+    document.body.appendChild(svg);
+  }
+}
+
+function removeStrokeFromDOM(g) {
+  var wrapper = g.closest('.drawing-layer');
+  if (wrapper) wrapper.remove();
+  else if (g.parentNode) g.remove();
+}
+
 function updateHint() {
-  var hasContent = svgLayer.querySelector('g') || document.querySelector('.text-block');
+  var hasContent = document.querySelector('.drawing-layer g') || document.querySelector('.text-block');
   hintEl.style.opacity = hasContent ? '0' : '1';
 }
 
@@ -920,40 +934,6 @@ let moveStrokeStart = {};
 let moveStrokeOrigTranslate = { x: 0, y: 0 };
 let moveUndoSnapshot = null;
 
-svgLayer.addEventListener('pointerdown', function (e) {
-  if (e.target.tagName !== 'path') return;
-
-  var group = e.target.parentNode;
-  var pathEl = group.querySelector('path.visible');
-  if (!pathEl) return;
-
-  if (selectedStroke === pathEl) {
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (document.activeElement && document.activeElement.contentEditable === 'true') {
-      document.activeElement.blur();
-    }
-
-    movingStroke = true;
-    moveStrokeStart = { x: e.clientX, y: e.clientY };
-    document.body.classList.add('grabbing');
-
-    var g = pathEl.closest('g');
-    var state = getTransformState(g);
-    moveStrokeOrigTranslate = { x: state.tx, y: state.ty };
-
-    var visPath = g.querySelector('path.visible');
-    var hitPath = g.querySelector('path.hit-target');
-    moveUndoSnapshot = {
-      el: g,
-      visD: visPath ? visPath.getAttribute('d') : '',
-      hitD: hitPath ? hitPath.getAttribute('d') : '',
-      state: JSON.parse(JSON.stringify(state))
-    };
-  }
-});
-
 document.addEventListener('pointermove', function (e) {
   if (!movingStroke || !selectedStroke) return;
 
@@ -994,10 +974,10 @@ document.addEventListener('pointerup', function () {
 function applyUndoRedo(action) {
   deselectStroke();
   if (action.type === 'stroke') {
-    if (action.el.parentNode) action.el.remove();
+    removeStrokeFromDOM(action.el);
     return { type: 'add-stroke', el: action.el };
   } else if (action.type === 'add-stroke') {
-    svgLayer.appendChild(action.el);
+    addStrokeToDOM(action.el);
     return { type: 'stroke', el: action.el };
   } else if (action.type === 'text') {
     if (action.el.parentNode) action.el.remove();
@@ -1007,10 +987,10 @@ function applyUndoRedo(action) {
     action.el.blur();
     return { type: 'text', el: action.el };
   } else if (action.type === 'delete-stroke') {
-    svgLayer.appendChild(action.el);
+    addStrokeToDOM(action.el);
     return { type: 'redo-delete', el: action.el };
   } else if (action.type === 'redo-delete') {
-    if (action.el.parentNode) action.el.remove();
+    removeStrokeFromDOM(action.el);
     return { type: 'delete-stroke', el: action.el };
   } else if (action.type === 'transform') {
     var g = action.el;
@@ -1139,14 +1119,27 @@ function applyUndoRedo(action) {
   } else if (action.type === 'multi-delete') {
     action.items.forEach(function (item) {
       if (item.type === 'text') document.body.appendChild(item.el);
-      else svgLayer.appendChild(item.el);
+      else addStrokeToDOM(item.el);
     });
     return { type: 'redo-multi-delete', items: action.items };
   } else if (action.type === 'redo-multi-delete') {
     action.items.forEach(function (item) {
-      if (item.el.parentNode) item.el.remove();
+      if (item.type === 'stroke') removeStrokeFromDOM(item.el);
+      else if (item.el.parentNode) item.el.remove();
     });
     return { type: 'multi-delete', items: action.items };
+  } else if (action.type === 'layer-reorder') {
+    var curPositions = action.items.map(function (item) {
+      return { el: item.el, nextSibling: item.el.nextElementSibling };
+    });
+    action.items.forEach(function (item) {
+      if (item.nextSibling && item.nextSibling.parentNode) {
+        document.body.insertBefore(item.el, item.nextSibling);
+      } else {
+        document.body.appendChild(item.el);
+      }
+    });
+    return { type: 'layer-reorder', items: curPositions };
   }
   updateHint();
   return null;
@@ -1310,7 +1303,7 @@ document.addEventListener('keydown', function (e) {
 
     function pasteStroke(node, target) {
       var g = node.cloneNode(true);
-      svgLayer.appendChild(g);
+      addStrokeToDOM(g);
       if (target) {
         var vp = g.querySelector('path.visible');
         var bbox = vp ? vp.getBBox() : { x: 0, y: 0 };
@@ -1403,7 +1396,8 @@ document.addEventListener('keydown', function (e) {
     if (multiSelected.length) {
       e.preventDefault();
       var items = multiSelected.map(function (item) {
-        item.el.remove();
+        if (item.type === 'stroke') removeStrokeFromDOM(item.el);
+        else item.el.remove();
         return { type: item.type, el: item.el };
       });
       redoStack.length = 0;
@@ -1425,7 +1419,7 @@ document.addEventListener('keydown', function (e) {
       e.preventDefault();
       var group = selectedStroke.closest('g');
       if (group) {
-        group.remove();
+        removeStrokeFromDOM(group);
         redoStack.length = 0;
         undoStack.push({ type: 'delete-stroke', el: group });
       } else {
@@ -1437,7 +1431,58 @@ document.addEventListener('keydown', function (e) {
     return;
   }
 
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+      (selectedStroke || selectedTextBlock || multiSelected.length)) {
+    e.preventDefault();
+    var layerEls = [];
+    if (multiSelected.length) {
+      multiSelected.forEach(function (item) {
+        if (item.type === 'stroke') {
+          var w = item.el.closest('.drawing-layer');
+          if (w) layerEls.push(w);
+        } else {
+          layerEls.push(item.el);
+        }
+      });
+    } else if (selectedStroke) {
+      var w = selectedStroke.closest('.drawing-layer');
+      if (w) layerEls.push(w);
+    } else if (selectedTextBlock) {
+      layerEls.push(selectedTextBlock);
+    }
+    var toFrontBack = e.shiftKey;
+    var forward = e.key === 'ArrowUp';
+    var prevPositions = layerEls.map(function (el) {
+      return { el: el, nextSibling: el.nextElementSibling };
+    });
+    layerEls.forEach(function (el) {
+      if (toFrontBack) {
+        if (forward) document.body.appendChild(el);
+        else {
+          var first = document.body.querySelector('.drawing-layer, .text-block');
+          if (first && first !== el) document.body.insertBefore(el, first);
+        }
+      } else {
+        if (forward) {
+          var next = el.nextElementSibling;
+          while (next && !next.classList.contains('drawing-layer') && !next.classList.contains('text-block')) next = next.nextElementSibling;
+          if (next && next.nextSibling) document.body.insertBefore(el, next.nextSibling);
+          else if (next) document.body.appendChild(el);
+        } else {
+          var prev = el.previousElementSibling;
+          while (prev && !prev.classList.contains('drawing-layer') && !prev.classList.contains('text-block')) prev = prev.previousElementSibling;
+          if (prev) document.body.insertBefore(el, prev);
+        }
+      }
+    });
+    redoStack.length = 0;
+    undoStack.push({ type: 'layer-reorder', items: prevPositions });
+    positionSelectionBox();
+    return;
+  }
+
   if ((e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') &&
+      !e.metaKey && !e.ctrlKey &&
       (selectedStroke || selectedTextBlock || multiSelected.length)) {
     e.preventDefault();
     var step = e.shiftKey ? 10 : 1;
@@ -1758,11 +1803,20 @@ function showToast(msg) {
 function loadSavedContent(htmlString) {
   var parser = new DOMParser();
   var doc = parser.parseFromString(htmlString, 'text/html');
-  var importedSvg = doc.getElementById('svg-layer');
-  if (importedSvg) {
-    importedSvg.querySelectorAll('g').forEach(function (g) {
-      svgLayer.appendChild(document.adoptNode(g));
+  doc.querySelectorAll('.drawing-layer').forEach(function (svg) {
+    var adopted = document.adoptNode(svg);
+    document.body.appendChild(adopted);
+    adopted.querySelectorAll('g').forEach(function (g) {
       var vp = g.querySelector('path.visible');
+      if (vp) syncHitTargetPointerEvents(vp);
+    });
+  });
+  var legacySvg = doc.getElementById('svg-layer');
+  if (legacySvg) {
+    legacySvg.querySelectorAll('g').forEach(function (g) {
+      var adopted = document.adoptNode(g);
+      addStrokeToDOM(adopted);
+      var vp = adopted.querySelector('path.visible');
       if (vp) syncHitTargetPointerEvents(vp);
     });
   }
@@ -1780,7 +1834,7 @@ document.querySelectorAll('.text-block').forEach(function (block) {
   block.contentEditable = 'false';
   attachTextBlockHandlers(block);
 });
-svgLayer.querySelectorAll('g path.visible').forEach(function (vp) {
+document.querySelectorAll('.drawing-layer g path.visible').forEach(function (vp) {
   syncHitTargetPointerEvents(vp);
 });
 updateHint();
@@ -1940,7 +1994,28 @@ document.body.addEventListener('pointerdown', function (e) {
   if (e.target.tagName === 'path') {
     var group = e.target.parentNode;
     clickedPathEl = group ? group.querySelector('path.visible') : null;
-    if (clickedPathEl && selectedStroke === clickedPathEl) return;
+    if (clickedPathEl && selectedStroke === clickedPathEl) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (document.activeElement && document.activeElement.contentEditable === 'true') {
+        document.activeElement.blur();
+      }
+      movingStroke = true;
+      moveStrokeStart = { x: e.clientX, y: e.clientY };
+      document.body.classList.add('grabbing');
+      var g = clickedPathEl.closest('g');
+      var state = getTransformState(g);
+      moveStrokeOrigTranslate = { x: state.tx, y: state.ty };
+      var visPath = g.querySelector('path.visible');
+      var hitPath = g.querySelector('path.hit-target');
+      moveUndoSnapshot = {
+        el: g,
+        visD: visPath ? visPath.getAttribute('d') : '',
+        hitD: hitPath ? hitPath.getAttribute('d') : '',
+        state: JSON.parse(JSON.stringify(state))
+      };
+      return;
+    }
   }
 
   e.preventDefault();
@@ -1985,7 +2060,7 @@ document.body.addEventListener('pointerdown', function (e) {
           found.push({ type: 'text', el: tb });
         }
       });
-      svgLayer.querySelectorAll('g').forEach(function (g) {
+      document.querySelectorAll('.drawing-layer g').forEach(function (g) {
         var vis = g.querySelector('path.visible');
         if (vis && rectsOverlap(rr, vis.getBoundingClientRect())) {
           found.push({ type: 'stroke', el: g });
@@ -2033,7 +2108,7 @@ document.body.addEventListener('pointerdown', function (e) {
       currentPath.classList.add('visible');
       currentGroup.appendChild(currentHitPath);
       currentGroup.appendChild(currentPath);
-      svgLayer.appendChild(currentGroup);
+      addStrokeToDOM(currentGroup);
       updateHint();
     }
   }
@@ -2162,7 +2237,7 @@ document.body.addEventListener('pointerdown', function (e) {
       undoStack.push({ type: 'stroke', el: currentGroup });
       updateHint();
     } else if (currentGroup && points.length < 3) {
-      currentGroup.remove();
+      removeStrokeFromDOM(currentGroup);
     } else if (currentGroup) {
       var smoothed = smoothPoints(points);
       var tip = [ue.clientX, ue.clientY];
