@@ -14,7 +14,7 @@
 
 <img width="600" alt="widyo demo" src="typenowgif.gif">
 
-*No accounts. No toolbars. No distractions. Just you and your thoughts.*
+*No accounts. No servers. No tracking. Your work stays on your device.*
 
 </div>
 
@@ -22,7 +22,9 @@
 
 ## What is this?
 
-widyo (write it down yo) is a deliberately minimal creative canvas. Click to type. Drag to draw. Move and resize anything. Save your work as a self-contained HTML file and reopen it later. There are no toolbars, no menus, no settings. The constraint is the feature.
+widyo (write it down yo) is a deliberately minimal creative canvas. Click to type. Drag to draw. Move and resize anything. There are no toolbars, no menus, no settings. The constraint is the feature.
+
+**Nothing leaves your device.** There are no accounts, no cloud storage, no server-side anything. When you save (Cmd+S), widyo downloads a self-contained HTML file to your machine. That file has everything in it -- your content, the styles, the code -- and it works offline. Open it in any browser to pick up where you left off. This is the most private way to take notes: your data never touches a server.
 
 ### Use it for
 
@@ -69,6 +71,13 @@ The entire app is a single `index.html` file of vanilla HTML, CSS, and JavaScrip
 | Drag and drop a .html file | Load a saved canvas into the current session |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo everything |
 | Delete / Backspace | Remove selected element |
+
+### Privacy
+
+- No accounts, no sign-ups, no cookies
+- No cloud storage -- everything stays on your machine
+- Saved files are fully self-contained HTML -- they work offline, forever
+- No data is ever sent to a server
 
 ### Tech stack
 
