@@ -149,6 +149,18 @@
     line-height: 1.8;
     transition: opacity 0.3s;
   }
+
+  /* ── Light mode overrides ─────────────────────────────────── */
+  body.light-mode { background: #fff; }
+  body.light-mode .text-block { color: #000; caret-color: #000; }
+  body.light-mode #svg-layer path.visible { stroke: #000; }
+  body.light-mode .selection-box,
+  body.light-mode .select-rect,
+  body.light-mode .multi-select-box { border-color: rgba(0, 0, 0, 0.6); }
+  body.light-mode .selection-handle { background: #000; border-color: #fff; }
+  body.light-mode #hint { color: rgba(0, 0, 0, 0.08); }
+  body.light-mode .save-toast { color: rgba(0, 0, 0, 0.7); background: rgba(0, 0, 0, 0.08); }
+  body.light-mode.drawing, body.light-mode.drawing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 21 L3 17 L17 3 L21 7 L7 21 Z' fill='black' stroke='%23888' stroke-width='1' stroke-linejoin='round'/%3E%3Cpath d='M1 23 L3 17 L7 21 Z' fill='%23444' stroke='%23888' stroke-width='0.5'/%3E%3Cpath d='M14 6 L18 10' stroke='%23666' stroke-width='0.5'/%3E%3C/svg%3E") 1 23, auto !important; }
 </style>
 </head>
 <body>
@@ -1169,7 +1181,7 @@ document.addEventListener('keydown', function (e) {
         clearTimeout(colorBufferTimer);
         colorBuffer = '';
       }
-    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o'))) {
+    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l'))) {
       return;
     }
   }
@@ -1225,6 +1237,12 @@ document.addEventListener('keydown', function (e) {
     });
     document.body.appendChild(input);
     input.click();
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+    e.preventDefault();
+    document.body.classList.toggle('light-mode');
     return;
   }
 
