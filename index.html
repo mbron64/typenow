@@ -157,6 +157,52 @@ function updateTextMaxWidth(block) {
   }
 }
 
+var colorProbe = document.createElement('div');
+colorProbe.style.display = 'none';
+document.body.appendChild(colorProbe);
+
+var colorAliases = {
+  'lightred':'#ff6666','darkred':'darkred','lightblue':'lightblue','darkblue':'darkblue',
+  'lightgreen':'lightgreen','darkgreen':'darkgreen','lightyellow':'lightyellow','darkyellow':'#cccc00',
+  'lightorange':'#ffcc80','darkorange':'darkorange','lightpurple':'#cc99ff','darkpurple':'#660099',
+  'lightpink':'lightpink','darkpink':'#ff1493','lightcyan':'lightcyan','darkcyan':'darkcyan',
+  'lightmagenta':'#ff80ff','darkmagenta':'darkmagenta','lightgray':'lightgray','darkgray':'darkgray',
+  'lightgrey':'lightgrey','darkgrey':'darkgrey','grey':'grey','gray':'gray',
+  'lightbrown':'#c4a882','darkbrown':'#4a2c0a','lightteal':'#80e0d0','darkteal':'#008080',
+  'lightviolet':'#ee82ee','darkviolet':'darkviolet','lightcoral':'lightcoral','darkcoral':'#cd5b45',
+  'lightgold':'#ffe066','darkgold':'#b8860b','lightolive':'#c0c860','darkolive':'#556b2f',
+  'lightmaroon':'#cc6680','darkmaroon':'#800000','lightnavy':'#6666cc','darknavy':'#000066',
+  'lightindigo':'#9999ff','darkindigo':'#330066','lightlime':'#ccff99','darklime':'#66cc00',
+  'lightsalmon':'lightsalmon','darksalmon':'darksalmon','lighttan':'#ffe4c4','darktan':'#d2a66a'
+};
+
+function isValidColor(str) {
+  colorProbe.style.color = '';
+  colorProbe.style.color = str;
+  return colorProbe.style.color !== '';
+}
+
+function resolveColor(buf) {
+  if (isValidColor(buf)) return buf;
+  var norm = buf.replace(/\s+/g, '');
+  if (isValidColor(norm)) return norm;
+  var lower = norm.toLowerCase();
+  if (colorAliases[lower]) return colorAliases[lower];
+  return null;
+}
+
+function resolveColorFromBuffer(buf) {
+  var result = resolveColor(buf);
+  if (result) return result;
+  var words = buf.split(/\s+/);
+  for (var i = 1; i < words.length; i++) {
+    var suffix = words.slice(i).join(' ');
+    result = resolveColor(suffix);
+    if (result) return result;
+  }
+  return null;
+}
+
 let startX, startY;
 let isDragging = false;
 let currentGroup = null;
@@ -167,6 +213,8 @@ let selectedStroke = null;
 let selectedTextBlock = null;
 let selectionBox = null;
 let undoStack = [];
+let colorBuffer = '';
+let colorBufferTimer = null;
 let redoStack = [];
 let multiSelected = [];
 let multiSelectBox = null;
@@ -542,6 +590,8 @@ function deselectStroke() {
   }
   removeSelectionBox();
   deselectMulti();
+  colorBuffer = '';
+  clearTimeout(colorBufferTimer);
 }
 
 function positionSelectionBox() {
@@ -982,6 +1032,10 @@ function applyUndoRedo(action) {
     var curHTML = action.el.innerHTML;
     action.el.innerHTML = action.html;
     return { type: 'text-edit', el: action.el, html: curHTML };
+  } else if (action.type === 'color-change') {
+    var cur = action.el.style[action.prop];
+    action.el.style[action.prop] = action.prevValue;
+    return { type: 'color-change', el: action.el, prop: action.prop, prevValue: cur };
   } else if (action.type === 'multi-move') {
     var reverseItems = action.items.map(function (item) {
       if (item.type === 'text') {
@@ -1047,10 +1101,47 @@ function applyUndoRedo(action) {
 
 document.addEventListener('keydown', function (e) {
   if (document.activeElement && document.activeElement.contentEditable === 'true') {
+    var sel = window.getSelection();
+    var hasTextSelection = sel && !sel.isCollapsed && sel.toString().length > 0;
+
     if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
       e.preventDefault();
       if (!document.activeElement.textContent.trim()) {
         document.activeElement.blur();
+      }
+    } else if (hasTextSelection && colorBuffer && (e.key === 'Backspace' || e.key === 'Delete')) {
+      e.preventDefault();
+      colorBuffer = colorBuffer.slice(0, -1);
+      clearTimeout(colorBufferTimer);
+      if (colorBuffer) {
+        colorBufferTimer = setTimeout(function () { colorBuffer = ''; }, 1500);
+      }
+    } else if (hasTextSelection && !e.ctrlKey && !e.metaKey && e.key.length === 1) {
+      e.preventDefault();
+      colorBuffer += e.key;
+      clearTimeout(colorBufferTimer);
+      colorBufferTimer = setTimeout(function () { colorBuffer = ''; }, 1500);
+
+      var appliedColor = resolveColorFromBuffer(colorBuffer);
+      if (appliedColor) {
+        try {
+          var block = document.activeElement;
+          var prevHTML = block.innerHTML;
+          var span = document.createElement('span');
+          span.style.color = appliedColor;
+          var range = sel.getRangeAt(0);
+          span.appendChild(range.extractContents());
+          span.querySelectorAll('[style]').forEach(function (child) {
+            child.style.color = '';
+            if (!child.getAttribute('style')) child.removeAttribute('style');
+          });
+          range.insertNode(span);
+          sel.selectAllChildren(span);
+          redoStack.length = 0;
+          undoStack.push({ type: 'text-edit', el: block, html: prevHTML });
+        } catch(err) {}
+        clearTimeout(colorBufferTimer);
+        colorBuffer = '';
       }
     } else {
       return;
@@ -1074,6 +1165,15 @@ document.addEventListener('keydown', function (e) {
   }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (colorBuffer) {
+      e.preventDefault();
+      colorBuffer = colorBuffer.slice(0, -1);
+      clearTimeout(colorBufferTimer);
+      if (colorBuffer) {
+        colorBufferTimer = setTimeout(function () { colorBuffer = ''; }, 1500);
+      }
+      return;
+    }
     if (multiSelected.length) {
       e.preventDefault();
       var items = multiSelected.map(function (item) {
@@ -1108,6 +1208,39 @@ document.addEventListener('keydown', function (e) {
       deselectStroke();
       updateHint();
     }
+    return;
+  }
+
+  if ((selectedStroke || selectedTextBlock) && !e.ctrlKey && !e.metaKey && e.key.length === 1) {
+    e.preventDefault();
+    colorBuffer += e.key;
+    clearTimeout(colorBufferTimer);
+    colorBufferTimer = setTimeout(function () { colorBuffer = ''; }, 1500);
+
+    var isFill = false;
+    var fillMatch = colorBuffer.match(/^fill\s+(.+)/i);
+    var colorSource = fillMatch ? fillMatch[1] : colorBuffer;
+    var appliedColor = resolveColorFromBuffer(colorSource);
+    if (fillMatch && !appliedColor) appliedColor = null;
+    if (fillMatch && appliedColor) isFill = true;
+    if (!fillMatch) appliedColor = resolveColorFromBuffer(colorBuffer);
+    if (appliedColor) {
+      if (selectedStroke) {
+        var prop = isFill ? 'fill' : 'stroke';
+        var prevColor = selectedStroke.style[prop] || '';
+        selectedStroke.style[prop] = appliedColor;
+        redoStack.length = 0;
+        undoStack.push({ type: 'color-change', el: selectedStroke, prop: prop, prevValue: prevColor });
+      } else if (selectedTextBlock) {
+        var prevColor = selectedTextBlock.style.color || '';
+        selectedTextBlock.style.color = appliedColor;
+        redoStack.length = 0;
+        undoStack.push({ type: 'color-change', el: selectedTextBlock, prop: 'color', prevValue: prevColor });
+      }
+      clearTimeout(colorBufferTimer);
+      colorBuffer = '';
+    }
+    return;
   }
 });
 
