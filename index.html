@@ -20,6 +20,7 @@
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
+    overflow: visible;
     pointer-events: none;
   }
   .drawing-layer path.visible {
@@ -132,6 +133,15 @@
     opacity: 1;
     transition: opacity 0.4s;
   }
+  #canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    transform-origin: 0 0;
+    overflow: visible;
+    transition: transform 0.1s ease-out;
+  }
+  #canvas.no-transition { transition: none; }
   #hint {
     position: absolute;
     top: 50%;
@@ -146,6 +156,8 @@
     line-height: 1.8;
     transition: opacity 0.3s;
   }
+  body.panning, body.panning * { cursor: grab !important; }
+  body.panning-active, body.panning-active * { cursor: grabbing !important; }
 
   /* ── Light mode overrides ─────────────────────────────────── */
   body.light-mode { background: #fff; }
@@ -162,21 +174,39 @@
 </head>
 <body>
 
+<div id="canvas"></div>
 <div id="hint">click anywhere to type<br>drag anywhere to draw</div>
 
 <script type="module">
 const THRESHOLD = 4;
 const svgNS = 'http://www.w3.org/2000/svg';
 const hintEl = document.getElementById('hint');
+const canvasEl = document.getElementById('canvas');
+
+let zoom = 1;
+let panX = 0;
+let panY = 0;
+
+function applyViewport() {
+  canvasEl.style.transform = 'translate(' + panX + 'px,' + panY + 'px) scale(' + zoom + ')';
+}
+
+function screenToCanvas(sx, sy) {
+  return { x: (sx - panX) / zoom, y: (sy - panY) / zoom };
+}
+
+function canvasToScreen(cx, cy) {
+  return { x: cx * zoom + panX, y: cy * zoom + panY };
+}
 
 function addStrokeToDOM(g) {
   if (g.parentNode && g.parentNode.classList && g.parentNode.classList.contains('drawing-layer')) {
-    document.body.appendChild(g.parentNode);
+    canvasEl.appendChild(g.parentNode);
   } else {
     var svg = document.createElementNS(svgNS, 'svg');
     svg.classList.add('drawing-layer');
     svg.appendChild(g);
-    document.body.appendChild(svg);
+    canvasEl.appendChild(svg);
   }
 }
 
@@ -187,13 +217,14 @@ function removeStrokeFromDOM(g) {
 }
 
 function updateHint() {
-  var hasContent = document.querySelector('.drawing-layer g') || document.querySelector('.text-block');
+  var hasContent = canvasEl.querySelector('.drawing-layer g') || canvasEl.querySelector('.text-block');
   hintEl.style.opacity = hasContent ? '0' : '1';
 }
 
 function updateTextMaxWidth(block) {
   if (!block.style.width) {
-    block.style.maxWidth = (window.innerWidth - parseInt(block.style.left) - 4) + 'px';
+    var canvasRight = (window.innerWidth - panX) / zoom;
+    block.style.maxWidth = Math.max(200, canvasRight - parseInt(block.style.left) - 4) + 'px';
   }
 }
 
@@ -650,6 +681,20 @@ function positionSelectionBox() {
 }
 
 function repositionBoxes() { positionSelectionBox(); positionMultiSelectBox(); }
+
+var boxRafId = null;
+var boxRafTimeout = null;
+function animateBoxSync() {
+  if (boxRafId) cancelAnimationFrame(boxRafId);
+  clearTimeout(boxRafTimeout);
+  function tick() { repositionBoxes(); boxRafId = requestAnimationFrame(tick); }
+  tick();
+  boxRafTimeout = setTimeout(function () {
+    cancelAnimationFrame(boxRafId);
+    boxRafId = null;
+    repositionBoxes();
+  }, 150);
+}
 window.addEventListener('resize', repositionBoxes);
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', repositionBoxes);
@@ -714,8 +759,8 @@ document.addEventListener('pointerdown', function (e) {
     resizeEdge = e.target.dataset.edge;
     resizeEdgeStartMouse = { x: e.clientX, y: e.clientY };
     var bl = selectedTextBlock;
-    var w = bl.style.width ? parseInt(bl.style.width) : bl.getBoundingClientRect().width;
-    var h = bl.getBoundingClientRect().height;
+    var w = bl.style.width ? parseInt(bl.style.width) : bl.getBoundingClientRect().width / zoom;
+    var h = bl.getBoundingClientRect().height / zoom;
     resizeEdgeStartRect = {
       left: parseInt(bl.style.left),
       top: parseInt(bl.style.top),
@@ -776,9 +821,11 @@ document.addEventListener('pointerdown', function (e) {
     var bl = selectedTextBlock;
     var origLeft = parseInt(bl.style.left);
     var origTop = parseInt(bl.style.top);
-    if (resizeCorner === 'nw') resizeTextAnchor = { x: origLeft + rect.width, y: origTop + rect.height };
-    else if (resizeCorner === 'ne') resizeTextAnchor = { x: origLeft, y: origTop + rect.height };
-    else if (resizeCorner === 'sw') resizeTextAnchor = { x: origLeft + rect.width, y: origTop };
+    var canvasW = rect.width / zoom;
+    var canvasH = rect.height / zoom;
+    if (resizeCorner === 'nw') resizeTextAnchor = { x: origLeft + canvasW, y: origTop + canvasH };
+    else if (resizeCorner === 'ne') resizeTextAnchor = { x: origLeft, y: origTop + canvasH };
+    else if (resizeCorner === 'sw') resizeTextAnchor = { x: origLeft + canvasW, y: origTop };
     else resizeTextAnchor = { x: origLeft, y: origTop };
     resizeTextUndoSnapshot = { el: bl, fontSize: resizeTextStartFontSize, width: bl.style.width || '', maxWidth: bl.style.maxWidth || '', left: origLeft, top: origTop, transform: bl.style.transform || '' };
     resizeTextStartFlipX = parseFloat(bl.dataset.flipX || 1);
@@ -788,8 +835,8 @@ document.addEventListener('pointerdown', function (e) {
 
 document.addEventListener('pointermove', function (e) {
   if (resizingTextEdge && selectedTextBlock) {
-    const edx = e.clientX - resizeEdgeStartMouse.x;
-    const edy = e.clientY - resizeEdgeStartMouse.y;
+    const edx = (e.clientX - resizeEdgeStartMouse.x) / zoom;
+    const edy = (e.clientY - resizeEdgeStartMouse.y) / zoom;
     const s = resizeEdgeStartRect;
     const bl = selectedTextBlock;
     if (resizeEdge === 'e') {
@@ -837,15 +884,16 @@ document.addEventListener('pointermove', function (e) {
     }
 
     var rawFlipX = 1, rawFlipY = 1;
+    var cp = screenToCanvas(e.clientX, e.clientY);
     if (resizeCorner === 'se' || resizeCorner === 'ne') {
-      if (e.clientX < resizeTextAnchor.x) rawFlipX = -1;
+      if (cp.x < resizeTextAnchor.x) rawFlipX = -1;
     } else {
-      if (e.clientX > resizeTextAnchor.x) rawFlipX = -1;
+      if (cp.x > resizeTextAnchor.x) rawFlipX = -1;
     }
     if (resizeCorner === 'se' || resizeCorner === 'sw') {
-      if (e.clientY < resizeTextAnchor.y) rawFlipY = -1;
+      if (cp.y < resizeTextAnchor.y) rawFlipY = -1;
     } else {
-      if (e.clientY > resizeTextAnchor.y) rawFlipY = -1;
+      if (cp.y > resizeTextAnchor.y) rawFlipY = -1;
     }
     var flipX = resizeTextStartFlipX * rawFlipX;
     var flipY = resizeTextStartFlipY * rawFlipY;
@@ -862,8 +910,8 @@ document.addEventListener('pointermove', function (e) {
     var handleOnBottom = (resizeCorner === 'se' || resizeCorner === 'sw');
     var extendsRight = handleOnRight !== (rawFlipX === -1);
     var extendsDown = handleOnBottom !== (rawFlipY === -1);
-    selectedTextBlock.style.left = (extendsRight ? resizeTextAnchor.x : resizeTextAnchor.x - newRect.width) + 'px';
-    selectedTextBlock.style.top = (extendsDown ? resizeTextAnchor.y : resizeTextAnchor.y - newRect.height) + 'px';
+    selectedTextBlock.style.left = (extendsRight ? resizeTextAnchor.x : resizeTextAnchor.x - newRect.width / zoom) + 'px';
+    selectedTextBlock.style.top = (extendsDown ? resizeTextAnchor.y : resizeTextAnchor.y - newRect.height / zoom) + 'px';
     updateTextMaxWidth(selectedTextBlock);
     positionSelectionBox();
     return;
@@ -871,8 +919,8 @@ document.addEventListener('pointermove', function (e) {
 
   if (!resizing || !selectedStroke) return;
 
-  const dx = e.clientX - resizeStartMouse.x;
-  const dy = e.clientY - resizeStartMouse.y;
+  const dx = (e.clientX - resizeStartMouse.x) / zoom;
+  const dy = (e.clientY - resizeStartMouse.y) / zoom;
 
   let scaleX, scaleY;
   if (resizeCorner === 'se') {
@@ -958,8 +1006,8 @@ let moveUndoSnapshot = null;
 document.addEventListener('pointermove', function (e) {
   if (!movingStroke || !selectedStroke) return;
 
-  var dx = e.clientX - moveStrokeStart.x;
-  var dy = e.clientY - moveStrokeStart.y;
+  var dx = (e.clientX - moveStrokeStart.x) / zoom;
+  var dy = (e.clientY - moveStrokeStart.y) / zoom;
 
   var g = selectedStroke.closest('g');
 
@@ -1004,7 +1052,7 @@ function applyUndoRedo(action) {
     if (action.el.parentNode) action.el.remove();
     return { type: 'add-text', el: action.el };
   } else if (action.type === 'add-text') {
-    document.body.appendChild(action.el);
+    canvasEl.appendChild(action.el);
     action.el.blur();
     return { type: 'text', el: action.el };
   } else if (action.type === 'delete-stroke') {
@@ -1070,7 +1118,7 @@ function applyUndoRedo(action) {
     bl.style.overflow = action.overflow;
     return { type: 'resize-text-box', el: cur.el, left: cur.left, top: cur.top, width: cur.width, height: cur.height, maxWidth: cur.maxWidth, overflow: cur.overflow };
   } else if (action.type === 'delete-text') {
-    document.body.appendChild(action.el);
+    canvasEl.appendChild(action.el);
     return { type: 'redo-delete-text', el: action.el };
   } else if (action.type === 'redo-delete-text') {
     if (action.el.parentNode) action.el.remove();
@@ -1158,7 +1206,7 @@ function applyUndoRedo(action) {
     return { type: 'multi-resize', items: reverseItems };
   } else if (action.type === 'multi-delete') {
     action.items.forEach(function (item) {
-      if (item.type === 'text') document.body.appendChild(item.el);
+      if (item.type === 'text') canvasEl.appendChild(item.el);
       else addStrokeToDOM(item.el);
     });
     return { type: 'redo-multi-delete', items: action.items };
@@ -1174,9 +1222,9 @@ function applyUndoRedo(action) {
     });
     action.items.forEach(function (item) {
       if (item.nextSibling && item.nextSibling.parentNode) {
-        document.body.insertBefore(item.el, item.nextSibling);
+        canvasEl.insertBefore(item.el, item.nextSibling);
       } else {
-        document.body.appendChild(item.el);
+        canvasEl.appendChild(item.el);
       }
     });
     return { type: 'layer-reorder', items: curPositions };
@@ -1256,7 +1304,10 @@ document.addEventListener('keydown', function (e) {
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     var transient = document.querySelectorAll('.selection-box, .multi-select-box, .select-rect, .save-toast');
     transient.forEach(function (el) { el.remove(); });
+    var savedTransform = canvasEl.style.transform;
+    canvasEl.style.transform = '';
     var html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+    canvasEl.style.transform = savedTransform;
     var blob = new Blob([html], { type: 'text/html' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1335,7 +1386,7 @@ document.addEventListener('keydown', function (e) {
         block.style.top = (parseInt(block.style.top) + 20) + 'px';
       }
       block.contentEditable = 'false';
-      document.body.appendChild(block);
+      canvasEl.appendChild(block);
       attachTextBlockHandlers(block);
       updateTextMaxWidth(block);
       return block;
@@ -1376,14 +1427,15 @@ document.addEventListener('keydown', function (e) {
         }
       });
       if (pasteTarget) {
-        var minX = Infinity, minY = Infinity;
+        var minSX = Infinity, minSY = Infinity;
         newMulti.forEach(function (item) {
           var r = item.el.getBoundingClientRect();
-          if (r.left < minX) minX = r.left;
-          if (r.top < minY) minY = r.top;
+          if (r.left < minSX) minSX = r.left;
+          if (r.top < minSY) minSY = r.top;
         });
-        var dx = pasteTarget.x - minX;
-        var dy = pasteTarget.y - minY;
+        var minCanvas = screenToCanvas(minSX, minSY);
+        var dx = pasteTarget.x - minCanvas.x;
+        var dy = pasteTarget.y - minCanvas.y;
         newMulti.forEach(function (item) {
           if (item.type === 'text') {
             item.el.style.left = (parseInt(item.el.style.left) + dx) + 'px';
@@ -1497,21 +1549,21 @@ document.addEventListener('keydown', function (e) {
     });
     layerEls.forEach(function (el) {
       if (toFrontBack) {
-        if (forward) document.body.appendChild(el);
+        if (forward) canvasEl.appendChild(el);
         else {
-          var first = document.body.querySelector('.drawing-layer, .text-block');
-          if (first && first !== el) document.body.insertBefore(el, first);
+          var first = canvasEl.querySelector('.drawing-layer, .text-block');
+          if (first && first !== el) canvasEl.insertBefore(el, first);
         }
       } else {
         if (forward) {
           var next = el.nextElementSibling;
           while (next && !next.classList.contains('drawing-layer') && !next.classList.contains('text-block')) next = next.nextElementSibling;
-          if (next && next.nextSibling) document.body.insertBefore(el, next.nextSibling);
-          else if (next) document.body.appendChild(el);
+          if (next && next.nextSibling) canvasEl.insertBefore(el, next.nextSibling);
+          else if (next) canvasEl.appendChild(el);
         } else {
           var prev = el.previousElementSibling;
           while (prev && !prev.classList.contains('drawing-layer') && !prev.classList.contains('text-block')) prev = prev.previousElementSibling;
-          if (prev) document.body.insertBefore(el, prev);
+          if (prev) canvasEl.insertBefore(el, prev);
         }
       }
     });
@@ -1733,8 +1785,8 @@ function attachTextBlockHandlers(block) {
         if (Math.hypot(sm.clientX - selStartX, sm.clientY - selStartY) > THRESHOLD) {
           selDragging = true;
           document.body.classList.add('grabbing');
-          block.style.left = (selOrigLeft + sm.clientX - selStartX) + 'px';
-          block.style.top = (selOrigTop + sm.clientY - selStartY) + 'px';
+          block.style.left = (selOrigLeft + (sm.clientX - selStartX) / zoom) + 'px';
+          block.style.top = (selOrigTop + (sm.clientY - selStartY) / zoom) + 'px';
           updateTextMaxWidth(block);
           positionSelectionBox();
         }
@@ -1774,8 +1826,8 @@ function attachTextBlockHandlers(block) {
       if (dist > THRESHOLD) {
         bDragging = true;
         document.body.classList.add('grabbing');
-        block.style.left = (bOrigLeft + me.clientX - bStartX) + 'px';
-        block.style.top = (bOrigTop + me.clientY - bStartY) + 'px';
+        block.style.left = (bOrigLeft + (me.clientX - bStartX) / zoom) + 'px';
+        block.style.top = (bOrigTop + (me.clientY - bStartY) / zoom) + 'px';
         updateTextMaxWidth(block);
         if (selectedTextBlock === block) positionSelectionBox();
       }
@@ -1820,10 +1872,11 @@ function createTextBlock(x, y) {
   block.contentEditable = 'true';
   block.style.left = x + 'px';
   block.style.top = y + 'px';
-  block.style.maxWidth = (window.innerWidth - x - 4) + 'px';
+  var canvasRight = (window.innerWidth - panX) / zoom;
+  block.style.maxWidth = Math.max(200, canvasRight - x - 4) + 'px';
   attachTextBlockHandlers(block);
   deselectStroke();
-  document.body.appendChild(block);
+  canvasEl.appendChild(block);
   block.focus();
   redoStack.length = 0;
   undoStack.push({ type: 'text', el: block });
@@ -1843,9 +1896,11 @@ function showToast(msg) {
 function loadSavedContent(htmlString) {
   var parser = new DOMParser();
   var doc = parser.parseFromString(htmlString, 'text/html');
-  doc.querySelectorAll('.drawing-layer').forEach(function (svg) {
+  var srcCanvas = doc.getElementById('canvas');
+  var searchRoot = srcCanvas || doc.body;
+  searchRoot.querySelectorAll('.drawing-layer').forEach(function (svg) {
     var adopted = document.adoptNode(svg);
-    document.body.appendChild(adopted);
+    canvasEl.appendChild(adopted);
     adopted.querySelectorAll('g').forEach(function (g) {
       var vp = g.querySelector('path.visible');
       if (vp) syncHitTargetPointerEvents(vp);
@@ -1860,21 +1915,21 @@ function loadSavedContent(htmlString) {
       if (vp) syncHitTargetPointerEvents(vp);
     });
   }
-  doc.querySelectorAll('.text-block').forEach(function (block) {
+  searchRoot.querySelectorAll('.text-block').forEach(function (block) {
     var adopted = document.adoptNode(block);
     adopted.contentEditable = 'false';
-    document.body.appendChild(adopted);
+    canvasEl.appendChild(adopted);
     attachTextBlockHandlers(adopted);
   });
   updateHint();
 }
 
 // ── Rehydrate saved content on load ───────────────────────────────
-document.querySelectorAll('.text-block').forEach(function (block) {
+canvasEl.querySelectorAll('.text-block').forEach(function (block) {
   block.contentEditable = 'false';
   attachTextBlockHandlers(block);
 });
-document.querySelectorAll('.drawing-layer g path.visible').forEach(function (vp) {
+canvasEl.querySelectorAll('.drawing-layer g path.visible').forEach(function (vp) {
   syncHitTargetPointerEvents(vp);
 });
 updateHint();
@@ -1937,8 +1992,8 @@ document.addEventListener('pointerdown', function (e) {
 
 document.addEventListener('pointermove', function (e) {
   if (multiMoving) {
-    var dx = e.clientX - multiMoveStart.x;
-    var dy = e.clientY - multiMoveStart.y;
+    var dx = (e.clientX - multiMoveStart.x) / zoom;
+    var dy = (e.clientY - multiMoveStart.y) / zoom;
     multiSelected.forEach(function (item, i) {
       if (item.type === 'text') {
         item.el.style.left = (multiMoveSnapshots[i].left + dx) + 'px';
@@ -1964,11 +2019,13 @@ document.addEventListener('pointermove', function (e) {
     else if (multiResizeCorner === 'ne') scale = ((sb.width + dx) + (sb.height - dy)) / (sb.width + sb.height);
     else scale = ((sb.width - dx) + (sb.height + dy)) / (sb.width + sb.height);
 
-    var originX, originY;
-    if (multiResizeCorner === 'se') { originX = sb.left; originY = sb.top; }
-    else if (multiResizeCorner === 'nw') { originX = sb.left + sb.width; originY = sb.top + sb.height; }
-    else if (multiResizeCorner === 'ne') { originX = sb.left; originY = sb.top + sb.height; }
-    else { originX = sb.left + sb.width; originY = sb.top; }
+    var screenOriginX, screenOriginY;
+    if (multiResizeCorner === 'se') { screenOriginX = sb.left; screenOriginY = sb.top; }
+    else if (multiResizeCorner === 'nw') { screenOriginX = sb.left + sb.width; screenOriginY = sb.top + sb.height; }
+    else if (multiResizeCorner === 'ne') { screenOriginX = sb.left; screenOriginY = sb.top + sb.height; }
+    else { screenOriginX = sb.left + sb.width; screenOriginY = sb.top; }
+    var canvasOrigin = screenToCanvas(screenOriginX, screenOriginY);
+    var originX = canvasOrigin.x, originY = canvasOrigin.y;
 
     multiSelected.forEach(function (item, i) {
       var snap = multiResizeSnapshots[i];
@@ -2042,6 +2099,7 @@ document.addEventListener('pointerup', function () {
 // ── Main Gesture Handler (body pointerdown) ───────────────────────
 
 document.body.addEventListener('pointerdown', function (e) {
+  if (spaceDown || spacePanning) return;
   if (e.target.classList.contains('text-block')) return;
   if (e.target.classList.contains('selection-handle')) return;
   if (e.target === multiSelectBox || (multiSelectBox && multiSelectBox.contains(e.target))) return;
@@ -2111,12 +2169,12 @@ document.body.addEventListener('pointerdown', function (e) {
         return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
       }
 
-      document.querySelectorAll('.text-block').forEach(function (tb) {
+      canvasEl.querySelectorAll('.text-block').forEach(function (tb) {
         if (rectsOverlap(rr, tb.getBoundingClientRect())) {
           found.push({ type: 'text', el: tb });
         }
       });
-      document.querySelectorAll('.drawing-layer g').forEach(function (g) {
+      canvasEl.querySelectorAll('.drawing-layer g').forEach(function (g) {
         var vis = g.querySelector('path.visible');
         if (vis && rectsOverlap(rr, vis.getBoundingClientRect())) {
           found.push({ type: 'stroke', el: g });
@@ -2135,8 +2193,11 @@ document.body.addEventListener('pointerdown', function (e) {
     return;
   }
 
-  startX = e.clientX;
-  startY = e.clientY;
+  var canvasStart = screenToCanvas(e.clientX, e.clientY);
+  startX = canvasStart.x;
+  startY = canvasStart.y;
+  var screenStartX = e.clientX;
+  var screenStartY = e.clientY;
   isDragging = false;
   currentGroup = null;
   currentPath = null;
@@ -2170,14 +2231,15 @@ document.body.addEventListener('pointerdown', function (e) {
   }
 
   function onMove(me) {
-    var dist = Math.hypot(me.clientX - startX, me.clientY - startY);
+    var dist = Math.hypot(me.clientX - screenStartX, me.clientY - screenStartY);
     if (dist > THRESHOLD) {
       isDragging = true;
       document.body.classList.add('drawing');
 
       if (me.shiftKey) {
         shiftDrawing = true;
-        var px = me.clientX, py = me.clientY;
+        var cp = screenToCanvas(me.clientX, me.clientY);
+        var px = cp.x, py = cp.y;
         if (shiftPoints.length > 0) {
           var last = shiftPoints[shiftPoints.length - 1];
           shiftPathLen += Math.hypot(px - last[0], py - last[1]);
@@ -2189,7 +2251,8 @@ document.body.addEventListener('pointerdown', function (e) {
 
       var coalesced = (me.getCoalescedEvents && me.getCoalescedEvents()) || [me];
       for (var ci = 0; ci < coalesced.length; ci++) {
-        var cx = coalesced[ci].clientX, cy = coalesced[ci].clientY;
+        var cc = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
+        var cx = cc.x, cy = cc.y;
         if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 3) {
           points.push([cx, cy]);
         }
@@ -2198,7 +2261,8 @@ document.body.addEventListener('pointerdown', function (e) {
       ensureGroup();
 
       var smoothed = smoothPoints(points);
-      var tip = [me.clientX, me.clientY];
+      var tipC = screenToCanvas(me.clientX, me.clientY);
+      var tip = [tipC.x, tipC.y];
       var lastSmoothed = smoothed[smoothed.length - 1];
       if (lastSmoothed && (tip[0] !== lastSmoothed[0] || tip[1] !== lastSmoothed[1])) {
         smoothed.push(tip);
@@ -2219,7 +2283,8 @@ document.body.addEventListener('pointerdown', function (e) {
         createTextBlock(startX, startY);
       }
     } else if (shiftDrawing && currentGroup) {
-      var fx = ue.clientX, fy = ue.clientY;
+      var fc = screenToCanvas(ue.clientX, ue.clientY);
+      var fx = fc.x, fy = fc.y;
       if (shiftPoints.length > 0) {
         var last = shiftPoints[shiftPoints.length - 1];
         shiftPathLen += Math.hypot(fx - last[0], fy - last[1]);
@@ -2296,7 +2361,8 @@ document.body.addEventListener('pointerdown', function (e) {
       removeStrokeFromDOM(currentGroup);
     } else if (currentGroup) {
       var smoothed = smoothPoints(points);
-      var tip = [ue.clientX, ue.clientY];
+      var tipC = screenToCanvas(ue.clientX, ue.clientY);
+      var tip = [tipC.x, tipC.y];
       var lastSmoothed = smoothed[smoothed.length - 1];
       if (lastSmoothed && (tip[0] !== lastSmoothed[0] || tip[1] !== lastSmoothed[1])) {
         smoothed.push(tip);
@@ -2321,6 +2387,80 @@ document.body.addEventListener('pointerdown', function (e) {
 
   document.addEventListener('pointermove', onMove);
   document.addEventListener('pointerup', onUp);
+});
+
+// ── Zoom & Pan ───────────────────────────────────────────────────
+
+var MIN_ZOOM = 0.01;
+var MAX_ZOOM = 50;
+
+document.addEventListener('wheel', function (e) {
+  e.preventDefault();
+
+  if (e.ctrlKey || e.metaKey) {
+    var zoomFactor = Math.pow(2, -e.deltaY / 60);
+    var newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * zoomFactor));
+    var cx = e.clientX, cy = e.clientY;
+    panX = cx - (cx - panX) * (newZoom / zoom);
+    panY = cy - (cy - panY) * (newZoom / zoom);
+    zoom = newZoom;
+  } else {
+    panX -= e.deltaX;
+    panY -= e.deltaY;
+  }
+  applyViewport();
+  animateBoxSync();
+}, { passive: false });
+
+var spaceDown = false;
+var spacePanning = false;
+var spacePanStart = {};
+
+document.addEventListener('keydown', function (e) {
+  if (e.key === ' ' && !spaceDown && !document.activeElement.contentEditable?.includes('true')) {
+    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+      e.preventDefault();
+      spaceDown = true;
+      document.body.classList.add('panning');
+    }
+  }
+});
+
+document.addEventListener('keyup', function (e) {
+  if (e.key === ' ') {
+    spaceDown = false;
+    spacePanning = false;
+    document.body.classList.remove('panning');
+    document.body.classList.remove('panning-active');
+  }
+});
+
+document.addEventListener('pointerdown', function (e) {
+  if (spaceDown && e.button === 0) {
+    e.preventDefault();
+    e.stopPropagation();
+    spacePanning = true;
+    spacePanStart = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+    canvasEl.classList.add('no-transition');
+    document.body.classList.add('panning-active');
+  }
+}, true);
+
+document.addEventListener('pointermove', function (e) {
+  if (spacePanning) {
+    panX = spacePanStart.px + (e.clientX - spacePanStart.x);
+    panY = spacePanStart.py + (e.clientY - spacePanStart.y);
+    applyViewport();
+    repositionBoxes();
+  }
+});
+
+document.addEventListener('pointerup', function () {
+  if (spacePanning) {
+    spacePanning = false;
+    canvasEl.classList.remove('no-transition');
+    document.body.classList.remove('panning-active');
+  }
 });
 
 // ── Drag-and-drop file loading ───────────────────────────────────

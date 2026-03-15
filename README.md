@@ -71,6 +71,9 @@ The entire app is a single `index.html` file of vanilla HTML, CSS, and JavaScrip
 | Arrow keys | Nudge selected element by 1px (hold Shift for 10px) |
 | Cmd+Arrow Up/Down | Move selected element one layer forward / backward |
 | Cmd+Shift+Arrow Up/Down | Move selected element to front / back |
+| Pinch / Ctrl+Scroll | Zoom in and out (centered on cursor) |
+| Scroll / Two-finger swipe | Pan around the canvas |
+| Space+Drag | Pan around the canvas |
 | Cmd+L / Ctrl+L | Toggle light mode |
 | Cmd+S / Ctrl+S | Save and download the canvas as a working HTML file |
 | Cmd+O / Ctrl+O | Open a previously saved widyo file |
