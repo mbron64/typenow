@@ -66,6 +66,8 @@ The entire app is a single `index.html` file of vanilla HTML, CSS, and JavaScrip
 | Type a color name while selected | Change the element's color (e.g. type `red`, `light blue`, `#ff0`) |
 | Type `fill` + color on a shape | Fill the shape interior (e.g. `fill red`) |
 | Highlight text, then type a color | Change just the highlighted text's color |
+| Cmd+C / Ctrl+C | Copy selected element(s) |
+| Cmd+V / Ctrl+V | Paste at cursor position or with offset |
 | Arrow keys | Nudge selected element by 1px (hold Shift for 10px) |
 | Cmd+L / Ctrl+L | Toggle light mode |
 | Cmd+S / Ctrl+S | Save and download the canvas as a working HTML file |

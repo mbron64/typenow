@@ -245,6 +245,7 @@ let redoStack = [];
 let multiSelected = [];
 let multiSelectBox = null;
 let suppressContextMenu = false;
+let clipboard = null;
 
 function getTransformState(g) {
   return {
@@ -1072,6 +1073,22 @@ function applyUndoRedo(action) {
     action.el.style[action.prop] = action.prevValue;
     if (action.prop === 'fill') syncHitTargetPointerEvents(action.el);
     return { type: 'color-change', el: action.el, prop: action.prop, prevValue: cur };
+  } else if (action.type === 'multi-color') {
+    var reverseItems = action.items.map(function (item) {
+      if (item.type === 'stroke') {
+        var cur = item.el.style[item.prop];
+        item.el.style[item.prop] = item.prevValue;
+        if (item.prop === 'fill') syncHitTargetPointerEvents(item.el);
+        return { type: 'stroke', el: item.el, prop: item.prop, prevValue: cur };
+      } else {
+        var curColor = item.el.style.color;
+        var curHTML = item.el.innerHTML;
+        item.el.style.color = item.prevColor;
+        item.el.innerHTML = item.prevHTML;
+        return { type: 'text', el: item.el, prevColor: curColor, prevHTML: curHTML };
+      }
+    });
+    return { type: 'multi-color', items: reverseItems };
   } else if (action.type === 'multi-move') {
     var reverseItems = action.items.map(function (item) {
       if (item.type === 'text') {
@@ -1179,7 +1196,7 @@ document.addEventListener('keydown', function (e) {
         clearTimeout(colorBufferTimer);
         colorBuffer = '';
       }
-    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l'))) {
+    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l' || (e.key === 'v' && clipboard)))) {
       return;
     }
   }
@@ -1241,6 +1258,135 @@ document.addEventListener('keydown', function (e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
     e.preventDefault();
     document.body.classList.toggle('light-mode');
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+    if (multiSelected.length) {
+      clipboard = { type: 'multi', items: multiSelected.map(function (item) {
+        if (item.type === 'text') return { type: 'text', node: item.el.cloneNode(true) };
+        else return { type: 'stroke', node: item.el.cloneNode(true) };
+      })};
+      e.preventDefault();
+      showToast('copied');
+    } else if (selectedTextBlock) {
+      clipboard = { type: 'text', node: selectedTextBlock.cloneNode(true) };
+      e.preventDefault();
+      showToast('copied');
+    } else if (selectedStroke) {
+      clipboard = { type: 'stroke', node: selectedStroke.closest('g').cloneNode(true) };
+      e.preventDefault();
+      showToast('copied');
+    }
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+    if (!clipboard) return;
+    e.preventDefault();
+    var pasteTarget = null;
+    var active = document.activeElement;
+    if (active && active.classList && active.classList.contains('text-block') && !active.textContent.trim()) {
+      pasteTarget = { x: parseInt(active.style.left), y: parseInt(active.style.top) };
+    }
+    if (active && active.blur) active.blur();
+    deselectStroke();
+
+    function pasteTextBlock(node, target) {
+      var block = node.cloneNode(true);
+      if (target) {
+        block.style.left = target.x + 'px';
+        block.style.top = target.y + 'px';
+      } else {
+        block.style.left = (parseInt(block.style.left) + 20) + 'px';
+        block.style.top = (parseInt(block.style.top) + 20) + 'px';
+      }
+      block.contentEditable = 'false';
+      document.body.appendChild(block);
+      attachTextBlockHandlers(block);
+      updateTextMaxWidth(block);
+      return block;
+    }
+
+    function pasteStroke(node, target) {
+      var g = node.cloneNode(true);
+      svgLayer.appendChild(g);
+      if (target) {
+        var vp = g.querySelector('path.visible');
+        var bbox = vp ? vp.getBBox() : { x: 0, y: 0 };
+        var dx = target.x - bbox.x;
+        var dy = target.y - bbox.y;
+        var st = getTransformState(g);
+        applyTransform(g, { tx: st.tx + dx, ty: st.ty + dy, sx: st.sx, sy: st.sy, sox: st.sox, soy: st.soy });
+      } else {
+        var st = getTransformState(g);
+        applyTransform(g, { tx: st.tx + 20, ty: st.ty + 20, sx: st.sx, sy: st.sy, sox: st.sox, soy: st.soy });
+      }
+      bakeTransform(g);
+      var vp2 = g.querySelector('path.visible');
+      if (vp2) syncHitTargetPointerEvents(vp2);
+      return g;
+    }
+
+    if (clipboard.type === 'multi') {
+      var undoItems = [];
+      var newMulti = [];
+      clipboard.items.forEach(function (item) {
+        if (item.type === 'text') {
+          var block = pasteTextBlock(item.node, null);
+          undoItems.push({ type: 'text', el: block });
+          newMulti.push({ type: 'text', el: block });
+        } else {
+          var g = pasteStroke(item.node, null);
+          undoItems.push({ type: 'stroke', el: g });
+          newMulti.push({ type: 'stroke', el: g });
+        }
+      });
+      if (pasteTarget) {
+        var minX = Infinity, minY = Infinity;
+        newMulti.forEach(function (item) {
+          var r = item.el.getBoundingClientRect();
+          if (r.left < minX) minX = r.left;
+          if (r.top < minY) minY = r.top;
+        });
+        var dx = pasteTarget.x - minX;
+        var dy = pasteTarget.y - minY;
+        newMulti.forEach(function (item) {
+          if (item.type === 'text') {
+            item.el.style.left = (parseInt(item.el.style.left) + dx) + 'px';
+            item.el.style.top = (parseInt(item.el.style.top) + dy) + 'px';
+            updateTextMaxWidth(item.el);
+          } else {
+            var st = getTransformState(item.el);
+            applyTransform(item.el, { tx: st.tx + dx, ty: st.ty + dy, sx: st.sx, sy: st.sy, sox: st.sox, soy: st.soy });
+            bakeTransform(item.el);
+          }
+        });
+      }
+      createMultiSelectBox();
+      multiSelected = newMulti;
+      positionMultiSelectBox();
+      redoStack.length = 0;
+      undoStack.push({ type: 'redo-multi-delete', items: undoItems });
+      clipboard = { type: 'multi', items: newMulti.map(function (item) {
+        return { type: item.type, node: item.el.cloneNode(true) };
+      })};
+    } else if (clipboard.type === 'text') {
+      var block = pasteTextBlock(clipboard.node, pasteTarget);
+      selectTextBlock(block);
+      redoStack.length = 0;
+      undoStack.push({ type: 'text', el: block });
+      clipboard = { type: 'text', node: block.cloneNode(true) };
+    } else if (clipboard.type === 'stroke') {
+      var g = pasteStroke(clipboard.node, pasteTarget);
+      var vp = g.querySelector('path.visible');
+      if (vp) selectStroke(vp);
+      redoStack.length = 0;
+      undoStack.push({ type: 'stroke', el: g });
+      clipboard = { type: 'stroke', node: g.cloneNode(true) };
+    }
+    updateHint();
+    showToast('pasted');
     return;
   }
 
@@ -1344,7 +1490,7 @@ document.addEventListener('keydown', function (e) {
     return;
   }
 
-  if ((selectedStroke || selectedTextBlock) && !e.ctrlKey && !e.metaKey && e.key.length === 1) {
+  if ((selectedStroke || selectedTextBlock || multiSelected.length) && !e.ctrlKey && !e.metaKey && e.key.length === 1) {
     e.preventDefault();
     colorBuffer += e.key;
     clearTimeout(colorBufferTimer);
@@ -1358,7 +1504,32 @@ document.addEventListener('keydown', function (e) {
     if (fillMatch && appliedColor) isFill = true;
     if (!fillMatch) appliedColor = resolveColorFromBuffer(colorBuffer);
     if (appliedColor) {
-      if (selectedStroke) {
+      if (multiSelected.length) {
+        var undoItems = [];
+        multiSelected.forEach(function (item) {
+          if (item.type === 'stroke') {
+            var vp = item.el.querySelector('path.visible');
+            if (vp) {
+              var prop = isFill ? 'fill' : 'stroke';
+              var prev = vp.style[prop] || '';
+              vp.style[prop] = appliedColor;
+              if (isFill) syncHitTargetPointerEvents(vp);
+              undoItems.push({ type: 'stroke', el: vp, prop: prop, prevValue: prev });
+            }
+          } else if (item.type === 'text') {
+            var prevColor = item.el.style.color || '';
+            var prevHTML = item.el.innerHTML;
+            item.el.style.color = appliedColor;
+            item.el.querySelectorAll('[style]').forEach(function (child) {
+              child.style.color = '';
+              if (!child.getAttribute('style')) child.removeAttribute('style');
+            });
+            undoItems.push({ type: 'text', el: item.el, prevColor: prevColor, prevHTML: prevHTML });
+          }
+        });
+        redoStack.length = 0;
+        undoStack.push({ type: 'multi-color', items: undoItems });
+      } else if (selectedStroke) {
         var prop = isFill ? 'fill' : 'stroke';
         var prevColor = selectedStroke.style[prop] || '';
         selectedStroke.style[prop] = appliedColor;
