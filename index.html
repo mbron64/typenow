@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>typenow</title>
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-N69LT02KJL"></script>
+<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-N69LT02KJL');</script>
 <style>
   *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -87,16 +89,50 @@
   .selection-handle.se { bottom: -4px; right: -4px; cursor: nwse-resize; }
   body.grabbing, body.grabbing * { cursor: grabbing !important; }
   body.drawing, body.drawing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 21 L3 17 L17 3 L21 7 L7 21 Z' fill='white' stroke='%23888' stroke-width='1' stroke-linejoin='round'/%3E%3Cpath d='M1 23 L3 17 L7 21 Z' fill='%23ccc' stroke='%23888' stroke-width='0.5'/%3E%3Cpath d='M14 6 L18 10' stroke='%23aaa' stroke-width='0.5'/%3E%3C/svg%3E") 1 23, auto !important; }
+  .select-rect {
+    position: absolute;
+    z-index: 4;
+    border: 1px dashed rgba(255, 255, 255, 0.6);
+    pointer-events: none;
+  }
+  .multi-select-box {
+    position: absolute;
+    z-index: 2;
+    border: 1px dashed rgba(255, 255, 255, 0.6);
+    pointer-events: all;
+    cursor: grab;
+  }
+  #hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: rgba(255, 255, 255, 0.08);
+    font-family: monospace;
+    font-size: 48px;
+    text-align: center;
+    pointer-events: none;
+    z-index: 0;
+    line-height: 1.8;
+    transition: opacity 0.3s;
+  }
 </style>
 </head>
 <body>
 
+<div id="hint">click anywhere to type<br>drag anywhere to draw</div>
 <svg id="svg-layer" xmlns="http://www.w3.org/2000/svg"></svg>
 
 <script type="module">
 const THRESHOLD = 4;
 const svgLayer = document.getElementById('svg-layer');
 const svgNS = 'http://www.w3.org/2000/svg';
+const hintEl = document.getElementById('hint');
+
+function updateHint() {
+  var hasContent = svgLayer.querySelector('g') || document.querySelector('.text-block');
+  hintEl.style.opacity = hasContent ? '0' : '1';
+}
 
 let startX, startY;
 let isDragging = false;
@@ -109,6 +145,9 @@ let selectedTextBlock = null;
 let selectionBox = null;
 let undoStack = [];
 let redoStack = [];
+let multiSelected = [];
+let multiSelectBox = null;
+let suppressContextMenu = false;
 
 function getTransformState(g) {
   return {
@@ -237,6 +276,54 @@ function createSelectionBox() {
   return box;
 }
 
+function deselectMulti() {
+  multiSelected = [];
+  if (multiSelectBox) {
+    multiSelectBox.remove();
+    multiSelectBox = null;
+  }
+}
+
+function positionMultiSelectBox() {
+  if (!multiSelectBox || !multiSelected.length) return;
+  var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  multiSelected.forEach(function (item) {
+    var r = item.el.getBoundingClientRect();
+    if (r.left < minX) minX = r.left;
+    if (r.top < minY) minY = r.top;
+    if (r.right > maxX) maxX = r.right;
+    if (r.bottom > maxY) maxY = r.bottom;
+  });
+  var pad = 4;
+  multiSelectBox.style.left = (minX - pad) + 'px';
+  multiSelectBox.style.top = (minY - pad) + 'px';
+  multiSelectBox.style.width = (maxX - minX + pad * 2) + 'px';
+  multiSelectBox.style.height = (maxY - minY + pad * 2) + 'px';
+}
+
+function createMultiSelectBox() {
+  deselectMulti();
+  var box = document.createElement('div');
+  box.className = 'multi-select-box';
+  ['nw', 'ne', 'sw', 'se'].forEach(function (corner) {
+    var handle = document.createElement('div');
+    handle.className = 'selection-handle ' + corner;
+    handle.dataset.corner = corner;
+    handle.dataset.multi = 'true';
+    box.appendChild(handle);
+  });
+  document.body.appendChild(box);
+  multiSelectBox = box;
+  return box;
+}
+
+document.addEventListener('contextmenu', function (e) {
+  if (suppressContextMenu) {
+    e.preventDefault();
+    suppressContextMenu = false;
+  }
+});
+
 function deselectStroke() {
   selectedStroke = null;
   if (selectedTextBlock) {
@@ -246,6 +333,7 @@ function deselectStroke() {
     selectedTextBlock = null;
   }
   removeSelectionBox();
+  deselectMulti();
 }
 
 function positionSelectionBox() {
@@ -262,10 +350,11 @@ function positionSelectionBox() {
   selectionBox.style.height = (rect.height + pad * 2) + 'px';
 }
 
-window.addEventListener('resize', positionSelectionBox);
+function repositionBoxes() { positionSelectionBox(); positionMultiSelectBox(); }
+window.addEventListener('resize', repositionBoxes);
 if (window.visualViewport) {
-  window.visualViewport.addEventListener('resize', positionSelectionBox);
-  window.visualViewport.addEventListener('scroll', positionSelectionBox);
+  window.visualViewport.addEventListener('resize', repositionBoxes);
+  window.visualViewport.addEventListener('scroll', repositionBoxes);
 }
 
 function selectStroke(pathEl) {
@@ -558,7 +647,61 @@ function applyUndoRedo(action) {
     var curHTML = action.el.innerHTML;
     action.el.innerHTML = action.html;
     return { type: 'text-edit', el: action.el, html: curHTML };
+  } else if (action.type === 'multi-move') {
+    var reverseItems = action.items.map(function (item) {
+      if (item.type === 'text') {
+        var cL = parseInt(item.el.style.left), cT = parseInt(item.el.style.top);
+        item.el.style.left = item.left + 'px';
+        item.el.style.top = item.top + 'px';
+        item.el.style.maxWidth = (window.innerWidth - item.left - 4) + 'px';
+        return { type: 'text', el: item.el, left: cL, top: cT };
+      } else {
+        var g = item.el;
+        var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
+        var cVD = vp ? vp.getAttribute('d') : '', cHD = hp ? hp.getAttribute('d') : '';
+        var cS = JSON.parse(JSON.stringify(getTransformState(g)));
+        if (vp) vp.setAttribute('d', item.visD);
+        if (hp) hp.setAttribute('d', item.hitD);
+        applyTransform(g, item.state);
+        return { type: 'stroke', el: g, visD: cVD, hitD: cHD, state: cS };
+      }
+    });
+    return { type: 'multi-move', items: reverseItems };
+  } else if (action.type === 'multi-resize') {
+    var reverseItems = action.items.map(function (item) {
+      if (item.type === 'text') {
+        var cL = parseInt(item.el.style.left), cT = parseInt(item.el.style.top);
+        var cFS = parseFloat(item.el.style.fontSize) || 16;
+        item.el.style.left = item.left + 'px';
+        item.el.style.top = item.top + 'px';
+        item.el.style.fontSize = item.fontSize + 'px';
+        item.el.style.maxWidth = (window.innerWidth - item.left - 4) + 'px';
+        return { type: 'text', el: item.el, left: cL, top: cT, fontSize: cFS };
+      } else {
+        var g = item.el;
+        var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
+        var cVD = vp ? vp.getAttribute('d') : '', cHD = hp ? hp.getAttribute('d') : '';
+        var cS = JSON.parse(JSON.stringify(getTransformState(g)));
+        if (vp) vp.setAttribute('d', item.visD);
+        if (hp) hp.setAttribute('d', item.hitD);
+        applyTransform(g, item.state);
+        return { type: 'stroke', el: g, visD: cVD, hitD: cHD, state: cS };
+      }
+    });
+    return { type: 'multi-resize', items: reverseItems };
+  } else if (action.type === 'multi-delete') {
+    action.items.forEach(function (item) {
+      if (item.type === 'text') document.body.appendChild(item.el);
+      else svgLayer.appendChild(item.el);
+    });
+    return { type: 'redo-multi-delete', items: action.items };
+  } else if (action.type === 'redo-multi-delete') {
+    action.items.forEach(function (item) {
+      if (item.el.parentNode) item.el.remove();
+    });
+    return { type: 'multi-delete', items: action.items };
   }
+  updateHint();
   return null;
 }
 
@@ -591,12 +734,25 @@ document.addEventListener('keydown', function (e) {
   }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (multiSelected.length) {
+      e.preventDefault();
+      var items = multiSelected.map(function (item) {
+        item.el.remove();
+        return { type: item.type, el: item.el };
+      });
+      redoStack.length = 0;
+      undoStack.push({ type: 'multi-delete', items: items });
+      deselectMulti();
+      updateHint();
+      return;
+    }
     if (selectedTextBlock) {
       e.preventDefault();
       redoStack.length = 0;
       undoStack.push({ type: 'delete-text', el: selectedTextBlock });
       selectedTextBlock.remove();
       deselectStroke();
+      updateHint();
       return;
     }
     if (selectedStroke) {
@@ -610,6 +766,7 @@ document.addEventListener('keydown', function (e) {
         selectedStroke.remove();
       }
       deselectStroke();
+      updateHint();
     }
   }
 });
@@ -782,6 +939,7 @@ function createTextBlock(x, y) {
         removeSelectionBox();
       }
       block.remove();
+      updateHint();
     }
   });
 
@@ -790,13 +948,150 @@ function createTextBlock(x, y) {
   block.focus();
   redoStack.length = 0;
   undoStack.push({ type: 'text', el: block });
+  updateHint();
 }
+
+// ── Main Gesture Handler (body pointerdown) ───────────────────────
+
+// ── Multi-Select Move/Resize ──────────────────────────────────────
+
+let multiMoving = false;
+let multiMoveStart = {};
+let multiMoveSnapshots = [];
+
+let multiResizing = false;
+let multiResizeCorner = null;
+let multiResizeStartMouse = {};
+let multiResizeStartBox = {};
+let multiResizeSnapshots = [];
+
+document.addEventListener('pointerdown', function (e) {
+  if (!multiSelectBox || !multiSelected.length) return;
+
+  if (e.target.dataset.multi === 'true' && e.target.classList.contains('selection-handle')) {
+    e.preventDefault();
+    e.stopPropagation();
+    multiResizing = true;
+    multiResizeCorner = e.target.dataset.corner;
+    multiResizeStartMouse = { x: e.clientX, y: e.clientY };
+    var br = multiSelectBox.getBoundingClientRect();
+    multiResizeStartBox = { left: br.left, top: br.top, width: br.width, height: br.height };
+    multiResizeSnapshots = multiSelected.map(function (item) {
+      if (item.type === 'text') {
+        return { type: 'text', el: item.el, left: parseInt(item.el.style.left), top: parseInt(item.el.style.top), fontSize: parseFloat(item.el.style.fontSize) || 16 };
+      } else {
+        var g = item.el;
+        var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
+        return { type: 'stroke', el: g, visD: vp ? vp.getAttribute('d') : '', hitD: hp ? hp.getAttribute('d') : '', state: JSON.parse(JSON.stringify(getTransformState(g))) };
+      }
+    });
+    return;
+  }
+
+  if (e.target === multiSelectBox || multiSelectBox.contains(e.target)) {
+    e.preventDefault();
+    e.stopPropagation();
+    multiMoving = true;
+    multiMoveStart = { x: e.clientX, y: e.clientY };
+    document.body.classList.add('grabbing');
+    multiMoveSnapshots = multiSelected.map(function (item) {
+      if (item.type === 'text') {
+        return { type: 'text', el: item.el, left: parseInt(item.el.style.left), top: parseInt(item.el.style.top) };
+      } else {
+        var g = item.el;
+        var vp = g.querySelector('path.visible'), hp = g.querySelector('path.hit-target');
+        return { type: 'stroke', el: g, visD: vp ? vp.getAttribute('d') : '', hitD: hp ? hp.getAttribute('d') : '', state: JSON.parse(JSON.stringify(getTransformState(g))) };
+      }
+    });
+    return;
+  }
+}, true);
+
+document.addEventListener('pointermove', function (e) {
+  if (multiMoving) {
+    var dx = e.clientX - multiMoveStart.x;
+    var dy = e.clientY - multiMoveStart.y;
+    multiSelected.forEach(function (item, i) {
+      if (item.type === 'text') {
+        item.el.style.left = (multiMoveSnapshots[i].left + dx) + 'px';
+        item.el.style.top = (multiMoveSnapshots[i].top + dy) + 'px';
+        item.el.style.maxWidth = (window.innerWidth - parseInt(item.el.style.left) - 4) + 'px';
+      } else {
+        var state = getTransformState(item.el);
+        var origState = multiMoveSnapshots[i].state;
+        applyTransform(item.el, { tx: origState.tx + dx, ty: origState.ty + dy, sx: state.sx, sy: state.sy, sox: state.sox, soy: state.soy });
+      }
+    });
+    positionMultiSelectBox();
+    return;
+  }
+
+  if (multiResizing) {
+    var dx = e.clientX - multiResizeStartMouse.x;
+    var dy = e.clientY - multiResizeStartMouse.y;
+    var sb = multiResizeStartBox;
+    var scale;
+    if (multiResizeCorner === 'se') scale = Math.max(0.1, ((sb.width + dx) + (sb.height + dy)) / (sb.width + sb.height));
+    else if (multiResizeCorner === 'nw') scale = Math.max(0.1, ((sb.width - dx) + (sb.height - dy)) / (sb.width + sb.height));
+    else if (multiResizeCorner === 'ne') scale = Math.max(0.1, ((sb.width + dx) + (sb.height - dy)) / (sb.width + sb.height));
+    else scale = Math.max(0.1, ((sb.width - dx) + (sb.height + dy)) / (sb.width + sb.height));
+
+    var originX, originY;
+    if (multiResizeCorner === 'se') { originX = sb.left; originY = sb.top; }
+    else if (multiResizeCorner === 'nw') { originX = sb.left + sb.width; originY = sb.top + sb.height; }
+    else if (multiResizeCorner === 'ne') { originX = sb.left; originY = sb.top + sb.height; }
+    else { originX = sb.left + sb.width; originY = sb.top; }
+
+    multiSelected.forEach(function (item, i) {
+      var snap = multiResizeSnapshots[i];
+      if (item.type === 'text') {
+        var newLeft = originX + (snap.left - originX) * scale;
+        var newTop = originY + (snap.top - originY) * scale;
+        var newFS = Math.max(4, Math.round(snap.fontSize * scale));
+        item.el.style.left = Math.round(newLeft) + 'px';
+        item.el.style.top = Math.round(newTop) + 'px';
+        item.el.style.fontSize = newFS + 'px';
+        item.el.style.maxWidth = (window.innerWidth - Math.round(newLeft) - 4) + 'px';
+      } else {
+        var g = item.el;
+        applyTransform(g, { tx: snap.state.tx, ty: snap.state.ty, sx: scale, sy: scale, sox: originX, soy: originY });
+      }
+    });
+    positionMultiSelectBox();
+    return;
+  }
+});
+
+document.addEventListener('pointerup', function () {
+  if (multiMoving) {
+    multiMoving = false;
+    document.body.classList.remove('grabbing');
+    multiSelected.forEach(function (item) {
+      if (item.type === 'stroke') bakeTransform(item.el);
+    });
+    redoStack.length = 0;
+    undoStack.push({ type: 'multi-move', items: multiMoveSnapshots });
+    multiMoveSnapshots = [];
+    positionMultiSelectBox();
+  }
+  if (multiResizing) {
+    multiResizing = false;
+    multiSelected.forEach(function (item) {
+      if (item.type === 'stroke') bakeTransform(item.el);
+    });
+    redoStack.length = 0;
+    undoStack.push({ type: 'multi-resize', items: multiResizeSnapshots });
+    multiResizeSnapshots = [];
+    positionMultiSelectBox();
+  }
+});
 
 // ── Main Gesture Handler (body pointerdown) ───────────────────────
 
 document.body.addEventListener('pointerdown', function (e) {
   if (e.target.classList.contains('text-block')) return;
   if (e.target.classList.contains('selection-handle')) return;
+  if (e.target === multiSelectBox || (multiSelectBox && multiSelectBox.contains(e.target))) return;
 
   var clickedPathEl = null;
   if (e.target.tagName === 'path') {
@@ -811,6 +1106,61 @@ document.body.addEventListener('pointerdown', function (e) {
     document.activeElement.blur();
   }
 
+  deselectStroke();
+
+  if (e.button === 2) {
+    var rsX = e.clientX, rsY = e.clientY;
+    var selectRect = document.createElement('div');
+    selectRect.className = 'select-rect';
+    document.body.appendChild(selectRect);
+    suppressContextMenu = true;
+
+    function rsMove(rm) {
+      var x1 = Math.min(rsX, rm.clientX), y1 = Math.min(rsY, rm.clientY);
+      var x2 = Math.max(rsX, rm.clientX), y2 = Math.max(rsY, rm.clientY);
+      selectRect.style.left = x1 + 'px';
+      selectRect.style.top = y1 + 'px';
+      selectRect.style.width = (x2 - x1) + 'px';
+      selectRect.style.height = (y2 - y1) + 'px';
+    }
+
+    function rsUp(ru) {
+      document.removeEventListener('pointermove', rsMove);
+      document.removeEventListener('pointerup', rsUp);
+      var rr = selectRect.getBoundingClientRect();
+      selectRect.remove();
+
+      if (rr.width < 5 && rr.height < 5) return;
+
+      var found = [];
+      function rectsOverlap(a, b) {
+        return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+      }
+
+      document.querySelectorAll('.text-block').forEach(function (tb) {
+        if (rectsOverlap(rr, tb.getBoundingClientRect())) {
+          found.push({ type: 'text', el: tb });
+        }
+      });
+      svgLayer.querySelectorAll('g').forEach(function (g) {
+        var vis = g.querySelector('path.visible');
+        if (vis && rectsOverlap(rr, vis.getBoundingClientRect())) {
+          found.push({ type: 'stroke', el: g });
+        }
+      });
+
+      if (found.length) {
+        createMultiSelectBox();
+        multiSelected = found;
+        positionMultiSelectBox();
+      }
+    }
+
+    document.addEventListener('pointermove', rsMove);
+    document.addEventListener('pointerup', rsUp);
+    return;
+  }
+
   startX = e.clientX;
   startY = e.clientY;
   isDragging = false;
@@ -818,8 +1168,6 @@ document.body.addEventListener('pointerdown', function (e) {
   currentPath = null;
   currentHitPath = null;
   points = [];
-
-  deselectStroke();
 
   function onMove(me) {
     var dist = Math.hypot(me.clientX - startX, me.clientY - startY);
@@ -844,6 +1192,7 @@ document.body.addEventListener('pointerdown', function (e) {
         currentGroup.appendChild(currentHitPath);
         currentGroup.appendChild(currentPath);
         svgLayer.appendChild(currentGroup);
+        updateHint();
       }
 
       var smoothed = smoothPoints(points);
@@ -879,6 +1228,7 @@ document.body.addEventListener('pointerdown', function (e) {
       currentPath.setAttribute('d', buildSmoothPath(smoothed));
       redoStack.length = 0;
       undoStack.push({ type: 'stroke', el: currentGroup });
+      updateHint();
     }
 
     currentGroup = null;
