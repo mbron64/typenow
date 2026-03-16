@@ -280,6 +280,7 @@
   <div class="panel-header"><div class="panel-title-row"><span class="panel-title">widyo.io</span><span class="panel-subtitle">write it down yo!</span></div><div class="panel-sub">commands</div></div>
   <h3>drawing</h3>
   <div class="row"><span class="key">Cmd + D</span><span class="desc">Draw without clicking</span></div>
+  <div class="row compact"><span class="key">Cmd + Shift + D</span><span class="desc">Shape without clicking</span></div>
   <div class="row"><span class="key">Shift + Draw</span><span class="desc">Straight line</span></div>
   <div class="row compact"><span class="key">Shift + Draw shape</span><span class="desc">Perfect shape</span></div>
 
@@ -1535,10 +1536,14 @@ document.addEventListener('keydown', function (e) {
     }
     deselectStroke();
     dKeyDrawing = true;
+    dKeyShift = e.shiftKey;
     dKeyGroup = null;
     dKeyPath = null;
     dKeyHitPath = null;
     dKeyPoints = [];
+    dKeyShiftPoints = [];
+    dKeyShiftMaxDist = 0;
+    dKeyShiftPathLen = 0;
     dKeyStartX = 0;
     dKeyStartY = 0;
     document.body.classList.add('drawing');
@@ -2443,7 +2448,7 @@ document.body.addEventListener('pointerdown', function (e) {
   var shiftPathLen = 0;
 
   function snapLineEnd(ex, ey) {
-    var SNAP_DEG = 1;
+    var SNAP_DEG = 2;
     var angle = Math.abs(Math.atan2(ey - startY, ex - startX) * 180 / Math.PI);
     if (angle < SNAP_DEG || angle > 180 - SNAP_DEG) ey = startY;
     else if (Math.abs(angle - 90) < SNAP_DEG) ex = startX;
@@ -2660,6 +2665,10 @@ var dKeyStartX = 0;
 var dKeyStartY = 0;
 var dKeyLastX = 0;
 var dKeyLastY = 0;
+var dKeyShift = false;
+var dKeyShiftPoints = [];
+var dKeyShiftMaxDist = 0;
+var dKeyShiftPathLen = 0;
 
 document.addEventListener('keydown', function (e) {
   if (e.key === ' ' && !spaceDown && !document.activeElement.contentEditable?.includes('true')) {
@@ -2721,6 +2730,16 @@ document.addEventListener('pointermove', function (e) {
     dKeyStartY = cc.y;
   }
 
+  if (dKeyShift) {
+    if (dKeyShiftPoints.length > 0) {
+      var slast = dKeyShiftPoints[dKeyShiftPoints.length - 1];
+      dKeyShiftPathLen += Math.hypot(cc.x - slast[0], cc.y - slast[1]);
+    }
+    dKeyShiftPoints.push([cc.x, cc.y]);
+    var distFromStart = Math.hypot(cc.x - dKeyStartX, cc.y - dKeyStartY);
+    if (distFromStart > dKeyShiftMaxDist) dKeyShiftMaxDist = distFromStart;
+  }
+
   var coalesced = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
   for (var ci = 0; ci < coalesced.length; ci++) {
     var cp = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
@@ -2752,7 +2771,70 @@ document.addEventListener('pointermove', function (e) {
 document.addEventListener('keyup', function (e) {
   if (!dKeyDrawing || (e.key !== 'Meta' && e.key !== 'Control')) return;
 
-  if (dKeyGroup && dKeyPoints.length < 3) {
+  if (dKeyShift && dKeyGroup) {
+    var fx = dKeyLastX, fy = dKeyLastY;
+    if (dKeyShiftPoints.length > 0) {
+      var last = dKeyShiftPoints[dKeyShiftPoints.length - 1];
+      dKeyShiftPathLen += Math.hypot(fx - last[0], fy - last[1]);
+    }
+    dKeyShiftPoints.push([fx, fy]);
+    var finalDist = Math.hypot(fx - dKeyStartX, fy - dKeyStartY);
+    if (finalDist > dKeyShiftMaxDist) dKeyShiftMaxDist = finalDist;
+
+    var shapeD = null;
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (var si = 0; si < dKeyShiftPoints.length; si++) {
+      if (dKeyShiftPoints[si][0] < minX) minX = dKeyShiftPoints[si][0];
+      if (dKeyShiftPoints[si][1] < minY) minY = dKeyShiftPoints[si][1];
+      if (dKeyShiftPoints[si][0] > maxX) maxX = dKeyShiftPoints[si][0];
+      if (dKeyShiftPoints[si][1] > maxY) maxY = dKeyShiftPoints[si][1];
+    }
+    var bboxDiag = Math.hypot(maxX - minX, maxY - minY);
+    var epsilon = bboxDiag * 0.08;
+    var simplified = rdpSimplify(dKeyShiftPoints, epsilon);
+    if (simplified.length >= 3) {
+      var first = simplified[0], last2 = simplified[simplified.length - 1];
+      if (Math.hypot(last2[0] - first[0], last2[1] - first[1]) < bboxDiag * 0.15) simplified.pop();
+    }
+    var pruned = true;
+    while (pruned && simplified.length > 3) {
+      pruned = false;
+      for (var ai = 0; ai < simplified.length; ai++) {
+        var prev = simplified[(ai - 1 + simplified.length) % simplified.length];
+        var cur = simplified[ai];
+        var next = simplified[(ai + 1) % simplified.length];
+        var v1x = prev[0] - cur[0], v1y = prev[1] - cur[1];
+        var v2x = next[0] - cur[0], v2y = next[1] - cur[1];
+        var dot = v1x * v2x + v1y * v2y;
+        var cross = v1x * v2y - v1y * v2x;
+        var angle = Math.abs(Math.atan2(cross, dot)) * 180 / Math.PI;
+        if (angle > 155 || angle < 20) { simplified.splice(ai, 1); pruned = true; break; }
+      }
+    }
+    var isClosed = dKeyShiftPoints.length > 8 && dKeyShiftMaxDist > 20 && dKeyShiftPathLen > finalDist * 1.5;
+    if (isClosed && simplified.length >= 5) {
+      var c = fitCircle(dKeyShiftPoints);
+      shapeD = buildEllipsePath(c.cx, c.cy, c.rx, c.ry);
+    } else if (simplified.length === 4) {
+      shapeD = buildRectPath.apply(null, fitRectangle(simplified));
+    } else if (simplified.length === 3) {
+      shapeD = buildTrianglePath.apply(null, fitTriangle(simplified));
+    } else if (isClosed) {
+      var c = fitCircle(dKeyShiftPoints);
+      shapeD = buildEllipsePath(c.cx, c.cy, c.rx, c.ry);
+    } else {
+      var SNAP_DEG = 2;
+      var snapAngle = Math.abs(Math.atan2(fy - dKeyStartY, fx - dKeyStartX) * 180 / Math.PI);
+      if (snapAngle < SNAP_DEG || snapAngle > 180 - SNAP_DEG) fy = dKeyStartY;
+      else if (Math.abs(snapAngle - 90) < SNAP_DEG) fx = dKeyStartX;
+      shapeD = 'M' + dKeyStartX.toFixed(2) + ',' + dKeyStartY.toFixed(2) + ' L' + fx.toFixed(2) + ',' + fy.toFixed(2);
+    }
+    dKeyPath.setAttribute('d', shapeD);
+    dKeyHitPath.setAttribute('d', shapeD);
+    redoStack.length = 0;
+    undoStack.push({ type: 'stroke', el: dKeyGroup });
+    updateHint();
+  } else if (dKeyGroup && dKeyPoints.length < 3) {
     removeStrokeFromDOM(dKeyGroup);
   } else if (dKeyGroup) {
     var smoothed = smoothPoints(dKeyPoints);
@@ -2766,11 +2848,20 @@ document.addEventListener('keyup', function (e) {
   }
 
   dKeyDrawing = false;
+  dKeyShift = false;
   dKeyGroup = null;
   dKeyPath = null;
   dKeyHitPath = null;
   dKeyPoints = [];
-  document.body.classList.remove('drawing');
+  dKeyShiftPoints = [];
+  dKeyShiftMaxDist = 0;
+  dKeyShiftPathLen = 0;
+});
+
+document.addEventListener('keyup', function (e) {
+  if ((e.key === 'd' || e.key === 'D') && !dKeyDrawing) {
+    document.body.classList.remove('drawing');
+  }
 });
 
 // ── Drag-and-drop file loading ───────────────────────────────────
