@@ -1,0 +1,15 @@
+{
+  "hosting": {
+    "site": "typenow",
+    "public": ".",
+    "ignore": ["firebase.json", ".firebaserc"],
+    "headers": [
+      {
+        "source": "**/*.html",
+        "headers": [
+          { "key": "Cache-Control", "value": "no-cache" }
+        ]
+      }
+    ]
+  }
+}
