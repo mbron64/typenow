@@ -6,10 +6,6 @@
 
 [![Try it out](https://img.shields.io/badge/try_it_out-widyo.io-000000?style=for-the-badge&logoColor=white)](https://widyo.io)
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
-[![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=flat-square)]()
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](https://github.com/mbron64/widyo/pulls)
-
 <br />
 
 <img width="600" alt="widyo demo" src="typenowgif.gif">
