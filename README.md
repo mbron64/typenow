@@ -4,7 +4,7 @@
 
 **A black canvas. Type anywhere. Draw anywhere. Let the ideas flow**
 
-[![Live Demo](https://img.shields.io/badge/demo-widyo.io-000000?style=for-the-badge&logoColor=white)](https://widyo.io)
+[![Try it out](https://img.shields.io/badge/try_it_out-widyo.io-000000?style=for-the-badge&logoColor=white)](https://widyo.io)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square)](LICENSE)
 [![Zero Dependencies](https://img.shields.io/badge/dependencies-0-brightgreen?style=flat-square)]()
