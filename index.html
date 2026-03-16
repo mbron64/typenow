@@ -512,14 +512,14 @@ function bakeTransform(g) {
 
 // ── Point pre-filtering ───────────────────────────────────────────
 
-var STREAMLINE = 0.5;
-
 function smoothPoints(raw) {
   if (raw.length < 2) return raw;
-  var t = 0.15 + (1 - STREAMLINE) * 0.85;
   var result = [raw[0]];
   var prev = raw[0];
   for (var i = 1; i < raw.length; i++) {
+    var dist = Math.hypot(raw[i][0] - prev[0], raw[i][1] - prev[1]);
+    var speed = dist * zoom;
+    var t = 0.3 + 0.6 * Math.min(speed / 20, 1);
     var smoothed = [
       prev[0] + (raw[i][0] - prev[0]) * t,
       prev[1] + (raw[i][1] - prev[1]) * t
@@ -2492,7 +2492,7 @@ document.body.addEventListener('pointerdown', function (e) {
       for (var ci = 0; ci < coalesced.length; ci++) {
         var cc = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
         var cx = cc.x, cy = cc.y;
-        if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 2.5) {
+        if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 1.5 / zoom) {
           points.push([cx, cy]);
         }
       }
@@ -2743,7 +2743,7 @@ document.addEventListener('pointermove', function (e) {
   var coalesced = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
   for (var ci = 0; ci < coalesced.length; ci++) {
     var cp = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
-    if (dKeyPoints.length === 0 || Math.hypot(cp.x - dKeyPoints[dKeyPoints.length - 1][0], cp.y - dKeyPoints[dKeyPoints.length - 1][1]) >= 2.5) {
+    if (dKeyPoints.length === 0 || Math.hypot(cp.x - dKeyPoints[dKeyPoints.length - 1][0], cp.y - dKeyPoints[dKeyPoints.length - 1][1]) >= 1.5 / zoom) {
       dKeyPoints.push([cp.x, cp.y]);
     }
   }
