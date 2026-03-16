@@ -281,6 +281,8 @@
   <h3>drawing</h3>
   <div class="row"><span class="key">Shift + Draw</span><span class="desc">Straight line</span></div>
   <div class="row compact"><span class="key">Shift + Draw shape</span><span class="desc">Perfect shape</span></div>
+  <div class="row"><span class="key">Cmd + B</span><span class="desc">Thicker line</span></div>
+  <div class="row"><span class="key">Cmd + Shift + B</span><span class="desc">Thinner line</span></div>
 
   <h3>color</h3>
   <div class="row compact"><span class="key">Select + type color name</span><span class="desc">Change color</span></div>
@@ -1307,6 +1309,21 @@ function applyUndoRedo(action) {
       }
     });
     return { type: 'multi-color', items: reverseItems };
+  } else if (action.type === 'stroke-width') {
+    var vis = action.el.querySelector('path.visible');
+    var hit = action.el.querySelector('path.hit-target');
+    if (vis) vis.style.strokeWidth = action.prev;
+    if (hit) hit.style.strokeWidth = action.prev + 20;
+    return { type: 'stroke-width', el: action.el, prev: action.next, next: action.prev };
+  } else if (action.type === 'multi-stroke-width') {
+    var reverseItems = action.items.map(function (item) {
+      var vis = item.el.querySelector('path.visible');
+      var hit = item.el.querySelector('path.hit-target');
+      if (vis) vis.style.strokeWidth = item.prev;
+      if (hit) hit.style.strokeWidth = item.prev + 20;
+      return { el: item.el, prev: item.next, next: item.prev };
+    });
+    return { type: 'multi-stroke-width', items: reverseItems };
   } else if (action.type === 'multi-move') {
     var reverseItems = action.items.map(function (item) {
       if (item.type === 'text') {
@@ -1436,7 +1453,7 @@ document.addEventListener('keydown', function (e) {
         clearTimeout(colorBufferTimer);
         colorBuffer = '';
       }
-    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l' || (e.key === 'v' && clipboard)))) {
+    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l' || (e.key === 'v' && clipboard) || ((e.key === 'b' || e.key === 'B') && selectedStroke)))) {
       return;
     }
   }
@@ -1502,6 +1519,39 @@ document.addEventListener('keydown', function (e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
     e.preventDefault();
     document.body.classList.toggle('light-mode');
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'b' || e.key === 'B')) {
+    var strokes = [];
+    if (multiSelected.length) {
+      multiSelected.forEach(function (item) {
+        if (item.type === 'stroke') strokes.push(item.el);
+      });
+    } else if (selectedStroke) {
+      strokes.push(selectedStroke.closest('g'));
+    }
+    if (strokes.length) {
+      e.preventDefault();
+      var step = e.shiftKey ? -2 : 2;
+      var undoItems = [];
+      strokes.forEach(function (g) {
+        var vis = g.querySelector('path.visible');
+        var hit = g.querySelector('path.hit-target');
+        if (!vis) return;
+        var cur = parseFloat(vis.style.strokeWidth) || parseFloat(getComputedStyle(vis).strokeWidth) || 4;
+        var next = Math.max(1, cur + step);
+        undoItems.push({ el: g, prev: cur, next: next });
+        vis.style.strokeWidth = next;
+        if (hit) hit.style.strokeWidth = next + 20;
+      });
+      if (undoItems.length === 1) {
+        undoStack.push({ type: 'stroke-width', el: undoItems[0].el, prev: undoItems[0].prev, next: undoItems[0].next });
+      } else if (undoItems.length > 1) {
+        undoStack.push({ type: 'multi-stroke-width', items: undoItems });
+      }
+      redoStack = [];
+    }
     return;
   }
 

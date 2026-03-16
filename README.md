@@ -57,6 +57,7 @@ The entire app is a single `index.html` file of vanilla HTML, CSS, and JavaScrip
 | Click on empty space | A text block is created -- start typing |
 | Click-drag on empty space | Draw a freehand stroke |
 | Shift+drag | Draw a perfect shape (line, circle, triangle, rectangle) |
+| Cmd+B / Cmd+Shift+B | Increase / decrease stroke thickness |
 | Click on a drawing | Select it (resize/move handles appear) |
 | Click on a text block | Select it (resize/move handles appear) |
 | Double-click a text block | Enter edit mode (cursor inside text) |
