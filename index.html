@@ -159,6 +159,97 @@
   body.panning, body.panning * { cursor: grab !important; }
   body.panning-active, body.panning-active * { cursor: grabbing !important; }
 
+  /* ── Help panel ─────────────────────────────────────────── */
+  #help-trigger {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 6px;
+    height: 100%;
+    z-index: 21;
+  }
+  #help-panel {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 300px;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.92);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    z-index: 20;
+    overflow-y: auto;
+    scrollbar-width: none;
+    padding: 36px 28px;
+    font-family: monospace;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    line-height: 1.4;
+    pointer-events: auto;
+  }
+  #help-panel::-webkit-scrollbar { display: none; }
+  #help-panel.open {
+    transform: translateX(0);
+  }
+  #help-panel h3 {
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 12px;
+    text-transform: lowercase;
+    letter-spacing: normal;
+    margin: 20px 0 8px 0;
+    font-weight: normal;
+  }
+  #help-panel .panel-header { margin-bottom: 24px; }
+  #help-panel .panel-title-row { display: flex; align-items: baseline; justify-content: space-between; }
+  #help-panel .panel-title { color: rgba(255, 255, 255, 0.3); font-size: 16px; font-weight: bold; }
+  #help-panel .panel-subtitle { color: rgba(255, 255, 255, 0.15); font-size: 11px; }
+  #help-panel .panel-sub { color: rgba(255, 255, 255, 0.55); font-size: 12px; margin-top: 4px; }
+  #help-panel .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 3px 0;
+  }
+  #help-panel .key {
+    color: rgba(255, 255, 255, 0.35);
+  }
+  #help-panel .desc {
+    text-align: right;
+  }
+  #help-panel .row.compact {
+    line-height: 1.2;
+    align-items: center;
+  }
+  #help-hint {
+    position: absolute;
+    top: 50%;
+    left: 28px;
+    transform: translateY(-50%);
+    color: rgba(255, 255, 255, 0.1);
+    font-family: monospace;
+    font-size: 28px;
+    pointer-events: none;
+    z-index: 0;
+    transition: opacity 0.3s;
+  }
+
+  /* ── Mobile help ──────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    #help-hint {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      transform: none;
+      font-size: 14px;
+      color: rgba(255, 255, 255, 0.25);
+      pointer-events: auto;
+      cursor: pointer;
+      z-index: 22;
+    }
+    #help-trigger { display: none; }
+    body.light-mode #help-hint { color: rgba(0, 0, 0, 0.25); }
+  }
+
   /* ── Light mode overrides ─────────────────────────────────── */
   body.light-mode { background: #fff; }
   body.light-mode .text-block { color: #000; caret-color: #000; }
@@ -169,19 +260,73 @@
   body.light-mode .selection-handle { background: #000; border-color: #fff; }
   body.light-mode #hint { color: rgba(0, 0, 0, 0.08); }
   body.light-mode .save-toast { color: rgba(0, 0, 0, 0.7); background: rgba(0, 0, 0, 0.08); }
+  body.light-mode #help-panel { background: rgba(255, 255, 255, 0.95); color: rgba(0, 0, 0, 0.5); }
+  body.light-mode #help-panel h3 { color: rgba(0, 0, 0, 0.5); }
+  body.light-mode #help-panel .key { color: rgba(0, 0, 0, 0.3); }
+  body.light-mode #help-panel .panel-title { color: rgba(0, 0, 0, 0.3); }
+  body.light-mode #help-panel .panel-subtitle { color: rgba(0, 0, 0, 0.15); }
+  body.light-mode #help-panel .panel-sub { color: rgba(0, 0, 0, 0.5); }
+  body.light-mode #help-hint { color: rgba(0, 0, 0, 0.1); }
   body.light-mode.drawing, body.light-mode.drawing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 21 L3 17 L17 3 L21 7 L7 21 Z' fill='black' stroke='%23888' stroke-width='1' stroke-linejoin='round'/%3E%3Cpath d='M1 23 L3 17 L7 21 Z' fill='%23444' stroke='%23888' stroke-width='0.5'/%3E%3Cpath d='M14 6 L18 10' stroke='%23666' stroke-width='0.5'/%3E%3C/svg%3E") 1 23, auto !important; }
 </style>
 </head>
 <body>
 
 <div id="canvas"></div>
-<div id="hint">click anywhere to type<br>drag anywhere to draw</div>
+<div id="hint">click to type<br>drag to draw</div>
+<div id="help-hint">&larr; help</div>
+<div id="help-trigger"></div>
+<div id="help-panel">
+  <div class="panel-header"><div class="panel-title-row"><span class="panel-title">widyo.io</span><span class="panel-subtitle">write it down yo!</span></div><div class="panel-sub">commands</div></div>
+  <h3>drawing</h3>
+  <div class="row"><span class="key">Shift + Draw</span><span class="desc">Straight line</span></div>
+  <div class="row compact"><span class="key">Shift + Draw shape</span><span class="desc">Perfect shape</span></div>
+
+  <h3>color</h3>
+  <div class="row compact"><span class="key">Select + type color name</span><span class="desc">Change color</span></div>
+  <div class="row compact"><span class="key">Type "fill" + color name</span><span class="desc">Fill shape color</span></div>
+  <div class="row compact"><span class="key">Highlight text + type color name</span><span class="desc">Change text color</span></div>
+  <h3>Selection</h3>
+  <div class="row"><span class="key">Right-click drag</span><span class="desc">Multi-select</span></div>
+  <div class="row"><span class="key">Arrow keys</span><span class="desc">Nudge</span></div>
+  <div class="row"><span class="key">Shift + Arrow keys</span><span class="desc">Nudge faster</span></div>
+  <div class="row"><span class="key">Cmd + &uarr;/&darr;</span><span class="desc">Change layer order</span></div>
+  <div class="row"><span class="key">Cmd + Shift + &uarr;/&darr;</span><span class="desc">Front / Back</span></div>
+  <h3>Navigate</h3>
+  <div class="row"><span class="key">Pinch / Cmd + Scroll</span><span class="desc">Zoom</span></div>
+  <div class="row"><span class="key">Space + Click &amp; Drag / Scroll</span><span class="desc">Pan</span></div>
+  <h3>Shortcuts</h3>
+  <div class="row"><span class="key">Cmd + S</span><span class="desc">Save &amp; Download</span></div>
+  <div class="row"><span class="key">Cmd + O</span><span class="desc">Open previous</span></div>
+  <div class="row"><span class="key">Drag &amp; Drop .html</span><span class="desc">Load canvas</span></div>
+
+  <div class="row"><span class="key">Cmd + L</span><span class="desc">Light mode</span></div>
+  <div class="row"><span class="key">Cmd + Z</span><span class="desc">Undo</span></div>
+  <div class="row"><span class="key">Cmd + Shift + Z</span><span class="desc">Redo</span></div>
+</div>
 
 <script type="module">
 const THRESHOLD = 4;
 const svgNS = 'http://www.w3.org/2000/svg';
 const hintEl = document.getElementById('hint');
+const helpHintEl = document.getElementById('help-hint');
+const helpTrigger = document.getElementById('help-trigger');
+const helpPanel = document.getElementById('help-panel');
 const canvasEl = document.getElementById('canvas');
+
+helpTrigger.addEventListener('mouseenter', function () {
+  helpPanel.classList.add('open');
+});
+helpPanel.addEventListener('mouseleave', function () {
+  helpPanel.classList.remove('open');
+});
+helpHintEl.addEventListener('click', function (e) {
+  e.stopPropagation();
+  helpPanel.classList.toggle('open');
+});
+helpPanel.addEventListener('click', function (e) {
+  e.stopPropagation();
+});
 
 let zoom = 1;
 let panX = 0;
@@ -219,6 +364,7 @@ function removeStrokeFromDOM(g) {
 function updateHint() {
   var hasContent = canvasEl.querySelector('.drawing-layer g') || canvasEl.querySelector('.text-block');
   hintEl.style.opacity = hasContent ? '0' : '1';
+  helpHintEl.style.opacity = hasContent ? '0' : '1';
 }
 
 function updateTextMaxWidth(block) {
@@ -1304,6 +1450,7 @@ document.addEventListener('keydown', function (e) {
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
     var transient = document.querySelectorAll('.selection-box, .multi-select-box, .select-rect, .save-toast');
     transient.forEach(function (el) { el.remove(); });
+    helpPanel.classList.remove('open');
     var savedTransform = canvasEl.style.transform;
     canvasEl.style.transform = '';
     var html = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
@@ -2395,6 +2542,7 @@ var MIN_ZOOM = 0.01;
 var MAX_ZOOM = 50;
 
 document.addEventListener('wheel', function (e) {
+  if (helpPanel.classList.contains('open') && helpPanel.contains(e.target)) return;
   e.preventDefault();
 
   if (e.ctrlKey || e.metaKey) {
