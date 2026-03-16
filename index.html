@@ -164,7 +164,7 @@
     position: fixed;
     top: 0;
     left: 0;
-    width: 6px;
+    width: 1px;
     height: 100%;
     z-index: 21;
   }
@@ -314,8 +314,21 @@ const helpTrigger = document.getElementById('help-trigger');
 const helpPanel = document.getElementById('help-panel');
 const canvasEl = document.getElementById('canvas');
 
+var helpShowTimer = null;
+var helpSuppressedUntil = 0;
+document.addEventListener('pointerdown', function (e) {
+  if (e.clientX < 20) {
+    clearTimeout(helpShowTimer);
+    helpSuppressedUntil = Date.now() + 1000;
+  }
+}, true);
 helpTrigger.addEventListener('mouseenter', function () {
-  helpPanel.classList.add('open');
+  helpShowTimer = setTimeout(function () {
+    if (Date.now() > helpSuppressedUntil) helpPanel.classList.add('open');
+  }, 500);
+});
+helpTrigger.addEventListener('mouseleave', function () {
+  clearTimeout(helpShowTimer);
 });
 helpPanel.addEventListener('mouseleave', function () {
   helpPanel.classList.remove('open');
