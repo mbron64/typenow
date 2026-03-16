@@ -279,6 +279,7 @@
 <div id="help-panel">
   <div class="panel-header"><div class="panel-title-row"><span class="panel-title">widyo.io</span><span class="panel-subtitle">write it down yo!</span></div><div class="panel-sub">commands</div></div>
   <h3>drawing</h3>
+  <div class="row"><span class="key">Cmd + D + Move</span><span class="desc">Draw without clicking</span></div>
   <div class="row"><span class="key">Shift + Draw</span><span class="desc">Straight line</span></div>
   <div class="row compact"><span class="key">Shift + Draw shape</span><span class="desc">Perfect shape</span></div>
 
@@ -510,19 +511,20 @@ function bakeTransform(g) {
 
 // ── Point pre-filtering ───────────────────────────────────────────
 
-const SMOOTH_WINDOW = 6;
+var STREAMLINE = 0.5;
 
 function smoothPoints(raw) {
-  if (raw.length < 3) return raw;
+  if (raw.length < 2) return raw;
+  var t = 0.15 + (1 - STREAMLINE) * 0.85;
   var result = [raw[0]];
+  var prev = raw[0];
   for (var i = 1; i < raw.length; i++) {
-    var w = Math.min(i, SMOOTH_WINDOW);
-    var sx = 0, sy = 0;
-    for (var j = 0; j <= w; j++) {
-      sx += raw[i - j][0];
-      sy += raw[i - j][1];
-    }
-    result.push([sx / (w + 1), sy / (w + 1)]);
+    var smoothed = [
+      prev[0] + (raw[i][0] - prev[0]) * t,
+      prev[1] + (raw[i][1] - prev[1]) * t
+    ];
+    result.push(smoothed);
+    prev = smoothed;
   }
   return result;
 }
@@ -1410,6 +1412,10 @@ function applyUndoRedo(action) {
 }
 
 document.addEventListener('keydown', function (e) {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'd' || e.key === 'D')) e.preventDefault();
+}, true);
+
+document.addEventListener('keydown', function (e) {
   if (document.activeElement && document.activeElement.contentEditable === 'true') {
     var sel = window.getSelection();
     var hasTextSelection = sel && !sel.isCollapsed && sel.toString().length > 0;
@@ -1453,7 +1459,7 @@ document.addEventListener('keydown', function (e) {
         clearTimeout(colorBufferTimer);
         colorBuffer = '';
       }
-    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l' || (e.key === 'v' && clipboard) || ((e.key === 'b' || e.key === 'B') && selectedStroke)))) {
+    } else if (!((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'o' || e.key === 'l' || e.key === 'd' || e.key === 'D' || (e.key === 'v' && clipboard) || ((e.key === 'b' || e.key === 'B') && selectedStroke)))) {
       return;
     }
   }
@@ -1519,6 +1525,23 @@ document.addEventListener('keydown', function (e) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
     e.preventDefault();
     document.body.classList.toggle('light-mode');
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D') && !dKeyDrawing) {
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.contentEditable === 'true') {
+      document.activeElement.blur();
+    }
+    deselectStroke();
+    dKeyDrawing = true;
+    dKeyGroup = null;
+    dKeyPath = null;
+    dKeyHitPath = null;
+    dKeyPoints = [];
+    dKeyStartX = 0;
+    dKeyStartY = 0;
+    document.body.classList.add('drawing');
     return;
   }
 
@@ -2309,6 +2332,7 @@ document.addEventListener('pointerup', function () {
 // ── Main Gesture Handler (body pointerdown) ───────────────────────
 
 document.body.addEventListener('pointerdown', function (e) {
+  if (dKeyDrawing) return;
   if (spaceDown || spacePanning) return;
   if (e.target.classList.contains('text-block')) return;
   if (e.target.classList.contains('selection-handle')) return;
@@ -2463,7 +2487,7 @@ document.body.addEventListener('pointerdown', function (e) {
       for (var ci = 0; ci < coalesced.length; ci++) {
         var cc = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
         var cx = cc.x, cy = cc.y;
-        if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 3) {
+        if (points.length === 0 || Math.hypot(cx - points[points.length - 1][0], cy - points[points.length - 1][1]) >= 2.5) {
           points.push([cx, cy]);
         }
       }
@@ -2627,6 +2651,16 @@ var spaceDown = false;
 var spacePanning = false;
 var spacePanStart = {};
 
+var dKeyDrawing = false;
+var dKeyGroup = null;
+var dKeyPath = null;
+var dKeyHitPath = null;
+var dKeyPoints = [];
+var dKeyStartX = 0;
+var dKeyStartY = 0;
+var dKeyLastX = 0;
+var dKeyLastY = 0;
+
 document.addEventListener('keydown', function (e) {
   if (e.key === ' ' && !spaceDown && !document.activeElement.contentEditable?.includes('true')) {
     if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
@@ -2672,6 +2706,71 @@ document.addEventListener('pointerup', function () {
     canvasEl.classList.remove('no-transition');
     document.body.classList.remove('panning-active');
   }
+});
+
+// ── Hold-D Draw Mode ─────────────────────────────────────────────
+
+document.addEventListener('pointermove', function (e) {
+  if (!dKeyDrawing) return;
+  var cc = screenToCanvas(e.clientX, e.clientY);
+  dKeyLastX = cc.x;
+  dKeyLastY = cc.y;
+
+  if (dKeyPoints.length === 0) {
+    dKeyStartX = cc.x;
+    dKeyStartY = cc.y;
+  }
+
+  var coalesced = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
+  for (var ci = 0; ci < coalesced.length; ci++) {
+    var cp = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
+    if (dKeyPoints.length === 0 || Math.hypot(cp.x - dKeyPoints[dKeyPoints.length - 1][0], cp.y - dKeyPoints[dKeyPoints.length - 1][1]) >= 2.5) {
+      dKeyPoints.push([cp.x, cp.y]);
+    }
+  }
+
+  if (!dKeyGroup) {
+    dKeyGroup = document.createElementNS(svgNS, 'g');
+    dKeyHitPath = document.createElementNS(svgNS, 'path');
+    dKeyHitPath.classList.add('hit-target');
+    dKeyPath = document.createElementNS(svgNS, 'path');
+    dKeyPath.classList.add('visible');
+    dKeyGroup.appendChild(dKeyHitPath);
+    dKeyGroup.appendChild(dKeyPath);
+    addStrokeToDOM(dKeyGroup);
+    updateHint();
+  }
+
+  var smoothed = smoothPoints(dKeyPoints);
+  var tip = [cc.x, cc.y];
+  var ls = smoothed[smoothed.length - 1];
+  if (ls && (tip[0] !== ls[0] || tip[1] !== ls[1])) smoothed.push(tip);
+  dKeyPath.setAttribute('d', buildSmoothPath(smoothed));
+  dKeyHitPath.setAttribute('d', buildHitPathD(dKeyPoints));
+});
+
+document.addEventListener('keyup', function (e) {
+  if (!dKeyDrawing || (e.key !== 'Meta' && e.key !== 'Control')) return;
+
+  if (dKeyGroup && dKeyPoints.length < 3) {
+    removeStrokeFromDOM(dKeyGroup);
+  } else if (dKeyGroup) {
+    var smoothed = smoothPoints(dKeyPoints);
+    var tip = [dKeyLastX, dKeyLastY];
+    var ls = smoothed[smoothed.length - 1];
+    if (ls && (tip[0] !== ls[0] || tip[1] !== ls[1])) smoothed.push(tip);
+    dKeyPath.setAttribute('d', buildSmoothPath(smoothed));
+    redoStack.length = 0;
+    undoStack.push({ type: 'stroke', el: dKeyGroup });
+    updateHint();
+  }
+
+  dKeyDrawing = false;
+  dKeyGroup = null;
+  dKeyPath = null;
+  dKeyHitPath = null;
+  dKeyPoints = [];
+  document.body.classList.remove('drawing');
 });
 
 // ── Drag-and-drop file loading ───────────────────────────────────
