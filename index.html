@@ -104,6 +104,22 @@
   .selection-handle.w { left: -4px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
   body.grabbing, body.grabbing * { cursor: grabbing !important; }
   body.drawing, body.drawing * { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 21 L3 17 L17 3 L21 7 L7 21 Z' fill='white' stroke='%23888' stroke-width='1' stroke-linejoin='round'/%3E%3Cpath d='M1 23 L3 17 L7 21 Z' fill='%23ccc' stroke='%23888' stroke-width='0.5'/%3E%3Cpath d='M14 6 L18 10' stroke='%23aaa' stroke-width='0.5'/%3E%3C/svg%3E") 1 23, auto !important; }
+  body.writing, body.writing * { cursor: none !important; }
+  #ekey-cursor {
+    position: fixed;
+    top: 0; left: 0;
+    width: 6px; height: 6px;
+    margin-left: -3px; margin-top: -3px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(136, 136, 136, 0.6);
+    pointer-events: none;
+    z-index: 99999;
+    display: none;
+  }
+  body.light-mode #ekey-cursor {
+    background: rgba(0, 0, 0, 0.85);
+  }
   .select-rect {
     position: absolute;
     z-index: 4;
@@ -274,6 +290,7 @@
 
 <div id="canvas"></div>
 <div id="hint">click to type<br>drag to draw</div>
+<div id="ekey-cursor"></div>
 <div id="help-hint">&larr; help</div>
 <div id="help-trigger"></div>
 <div id="help-panel">
@@ -281,6 +298,7 @@
   <h3>drawing</h3>
   <div class="row"><span class="key">Cmd + D</span><span class="desc">Draw without clicking</span></div>
   <div class="row compact"><span class="key">Cmd + Shift + D</span><span class="desc">Shape without clicking</span></div>
+  <div class="row"><span class="key">Cmd + E</span><span class="desc">Write mode (auto-advance)</span></div>
   <div class="row"><span class="key">Shift + Draw</span><span class="desc">Straight line</span></div>
   <div class="row compact"><span class="key">Shift + Draw shape</span><span class="desc">Perfect shape</span></div>
 
@@ -517,9 +535,10 @@ function smoothPoints(raw) {
   var result = [raw[0]];
   var prev = raw[0];
   for (var i = 1; i < raw.length; i++) {
+    if (i <= 2) { result.push(raw[i]); prev = raw[i]; continue; }
     var dist = Math.hypot(raw[i][0] - prev[0], raw[i][1] - prev[1]);
     var speed = dist * zoom;
-    var t = 0.3 + 0.6 * Math.min(speed / 20, 1);
+    var t = 0.4 + 0.5 * Math.min(speed / 20, 1);
     var smoothed = [
       prev[0] + (raw[i][0] - prev[0]) * t,
       prev[1] + (raw[i][1] - prev[1]) * t
@@ -1529,7 +1548,7 @@ document.addEventListener('keydown', function (e) {
     return;
   }
 
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D') && !dKeyDrawing) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D') && !dKeyDrawing && !eKeyWriting) {
     e.preventDefault();
     if (document.activeElement && document.activeElement.contentEditable === 'true') {
       document.activeElement.blur();
@@ -1547,6 +1566,30 @@ document.addEventListener('keydown', function (e) {
     dKeyStartX = 0;
     dKeyStartY = 0;
     document.body.classList.add('drawing');
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'e' || e.key === 'E') && !eKeyWriting && !dKeyDrawing) {
+    e.preventDefault();
+    if (document.activeElement && document.activeElement.contentEditable === 'true') {
+      document.activeElement.blur();
+    }
+    deselectStroke();
+    eKeyWriting = true;
+    eKeyGroup = null;
+    eKeyPath = null;
+    eKeyHitPath = null;
+    eKeyPoints = [];
+    eKeyLastMoveTime = 0;
+    eKeyAutoAdvanceX = 0;
+    eKeyCurrentOffsetX = 0;
+    eKeyCurrentOffsetY = 0;
+    eKeyWordBaseY = 0;
+    eKeyLastLetterW = 0;
+    eKeyWordActive = false;
+    eKeyLastStrokeEndTime = 0;
+    document.body.classList.add('writing');
+    document.getElementById('ekey-cursor').style.display = 'block';
     return;
   }
 
@@ -2338,6 +2381,7 @@ document.addEventListener('pointerup', function () {
 
 document.body.addEventListener('pointerdown', function (e) {
   if (dKeyDrawing) return;
+  if (eKeyWriting) return;
   if (spaceDown || spacePanning) return;
   if (e.target.classList.contains('text-block')) return;
   if (e.target.classList.contains('selection-handle')) return;
@@ -2670,7 +2714,52 @@ var dKeyShiftPoints = [];
 var dKeyShiftMaxDist = 0;
 var dKeyShiftPathLen = 0;
 
+var eKeyWriting = false;
+var eKeyGroup = null;
+var eKeyPath = null;
+var eKeyHitPath = null;
+var eKeyPoints = [];
+var eKeyLastX = 0;
+var eKeyLastY = 0;
+var eKeyLastMoveTime = 0;
+var eKeyAutoAdvanceX = 0;
+var eKeyCurrentOffsetX = 0;
+var eKeyCurrentOffsetY = 0;
+var eKeyWordBaseY = 0;
+var eKeyLastLetterW = 0;
+var eKeyWordActive = false;
+var eKeyLastStrokeEndTime = 0;
+var EKEY_WORD_TIMEOUT = 1500;
+
 document.addEventListener('keydown', function (e) {
+  if (eKeyWriting && e.key === ' ') {
+    e.preventDefault();
+    if (eKeyPoints.length >= 3 && eKeyGroup) {
+      var smoothed = smoothPoints(eKeyPoints);
+      eKeyPath.setAttribute('d', buildSmoothPath(smoothed));
+      redoStack.length = 0;
+      undoStack.push({ type: 'stroke', el: eKeyGroup });
+      var bMinX = Infinity, bMaxX = -Infinity;
+      for (var bi = 0; bi < eKeyPoints.length; bi++) {
+        if (eKeyPoints[bi][0] < bMinX) bMinX = eKeyPoints[bi][0];
+        if (eKeyPoints[bi][0] > bMaxX) bMaxX = eKeyPoints[bi][0];
+      }
+      eKeyLastLetterW = bMaxX - bMinX;
+      var spaceW = Math.max(eKeyLastLetterW * 0.6, 15 / zoom);
+      eKeyAutoAdvanceX = bMaxX + spaceW;
+    } else if (eKeyWordActive) {
+      var spaceW = Math.max(eKeyLastLetterW * 0.6, 15 / zoom);
+      eKeyAutoAdvanceX += spaceW;
+    }
+    if (eKeyGroup && eKeyPoints.length < 3) removeStrokeFromDOM(eKeyGroup);
+    eKeyGroup = null;
+    eKeyPath = null;
+    eKeyHitPath = null;
+    eKeyPoints = [];
+    eKeyWordActive = true;
+    eKeyLastStrokeEndTime = performance.now();
+    return;
+  }
   if (e.key === ' ' && !spaceDown && !document.activeElement.contentEditable?.includes('true')) {
     if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
       e.preventDefault();
@@ -2766,6 +2855,129 @@ document.addEventListener('pointermove', function (e) {
   if (ls && (tip[0] !== ls[0] || tip[1] !== ls[1])) smoothed.push(tip);
   dKeyPath.setAttribute('d', buildSmoothPath(smoothed));
   dKeyHitPath.setAttribute('d', buildHitPathD(dKeyPoints));
+});
+
+// ── Hold-E Write Mode ─────────────────────────────────────────────
+
+document.addEventListener('pointermove', function (e) {
+  if (!eKeyWriting) return;
+  var cc = screenToCanvas(e.clientX, e.clientY);
+  var now = performance.now();
+
+  if (eKeyPoints.length > 0 && eKeyLastMoveTime > 0) {
+    var gap = now - eKeyLastMoveTime;
+    if (gap > 200) {
+      if (eKeyPoints.length >= 3 && eKeyGroup) {
+        var smoothed = smoothPoints(eKeyPoints);
+        eKeyPath.setAttribute('d', buildSmoothPath(smoothed));
+        redoStack.length = 0;
+        undoStack.push({ type: 'stroke', el: eKeyGroup });
+        var bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity;
+        for (var bi = 0; bi < eKeyPoints.length; bi++) {
+          if (eKeyPoints[bi][0] < bMinX) bMinX = eKeyPoints[bi][0];
+          if (eKeyPoints[bi][0] > bMaxX) bMaxX = eKeyPoints[bi][0];
+          if (eKeyPoints[bi][1] < bMinY) bMinY = eKeyPoints[bi][1];
+          if (eKeyPoints[bi][1] > bMaxY) bMaxY = eKeyPoints[bi][1];
+        }
+        var letterW = bMaxX - bMinX;
+        if (letterW >= 10 / zoom) {
+          eKeyLastLetterW = letterW;
+          var letterGap = Math.max(letterW * 0.25, 8 / zoom);
+          eKeyAutoAdvanceX = bMaxX + letterGap;
+        }
+        if (eKeyWordBaseY === 0) eKeyWordBaseY = (bMinY + bMaxY) / 2;
+        eKeyWordActive = true;
+        eKeyLastStrokeEndTime = now;
+      } else if (eKeyGroup) {
+        removeStrokeFromDOM(eKeyGroup);
+      }
+      eKeyGroup = null;
+      eKeyPath = null;
+      eKeyHitPath = null;
+      eKeyPoints = [];
+    }
+  }
+  eKeyLastMoveTime = now;
+
+  if (eKeyPoints.length === 0) {
+    if (eKeyWordActive && (now - eKeyLastStrokeEndTime < EKEY_WORD_TIMEOUT)) {
+      eKeyCurrentOffsetX = eKeyAutoAdvanceX - cc.x;
+      eKeyCurrentOffsetY = eKeyWordBaseY - cc.y;
+    } else {
+      eKeyCurrentOffsetX = 0;
+      eKeyCurrentOffsetY = 0;
+      eKeyWordActive = false;
+    }
+  }
+
+  cc.x += eKeyCurrentOffsetX;
+  cc.y += eKeyCurrentOffsetY;
+  eKeyLastX = cc.x;
+  eKeyLastY = cc.y;
+
+  var fakeCursor = document.getElementById('ekey-cursor');
+  fakeCursor.style.transform = 'translate3d(' + (cc.x * zoom + panX) + 'px,' + (cc.y * zoom + panY) + 'px, 0)';
+
+  var coalesced = (e.getCoalescedEvents && e.getCoalescedEvents()) || [e];
+  for (var ci = 0; ci < coalesced.length; ci++) {
+    var cp = screenToCanvas(coalesced[ci].clientX, coalesced[ci].clientY);
+    cp.x += eKeyCurrentOffsetX;
+    cp.y += eKeyCurrentOffsetY;
+    if (eKeyPoints.length === 0 ||
+        Math.hypot(cp.x - eKeyPoints[eKeyPoints.length - 1][0],
+                   cp.y - eKeyPoints[eKeyPoints.length - 1][1]) >= 1.5 / zoom) {
+      eKeyPoints.push([cp.x, cp.y]);
+    }
+  }
+
+  if (!eKeyGroup) {
+    eKeyGroup = document.createElementNS(svgNS, 'g');
+    eKeyHitPath = document.createElementNS(svgNS, 'path');
+    eKeyHitPath.classList.add('hit-target');
+    eKeyPath = document.createElementNS(svgNS, 'path');
+    eKeyPath.classList.add('visible');
+    eKeyGroup.appendChild(eKeyHitPath);
+    eKeyGroup.appendChild(eKeyPath);
+    addStrokeToDOM(eKeyGroup);
+    updateHint();
+  }
+
+  var smoothed = smoothPoints(eKeyPoints);
+  var tip = [cc.x, cc.y];
+  var ls = smoothed[smoothed.length - 1];
+  if (ls && (tip[0] !== ls[0] || tip[1] !== ls[1])) smoothed.push(tip);
+  eKeyPath.setAttribute('d', buildSmoothPath(smoothed));
+  eKeyHitPath.setAttribute('d', buildHitPathD(eKeyPoints));
+});
+
+document.addEventListener('keyup', function (e) {
+  if (!eKeyWriting || (e.key !== 'e' && e.key !== 'E')) return;
+  if (eKeyPoints.length >= 3 && eKeyGroup) {
+    var smoothed = smoothPoints(eKeyPoints);
+    var tip = [eKeyLastX, eKeyLastY];
+    var ls = smoothed[smoothed.length - 1];
+    if (ls && (tip[0] !== ls[0] || tip[1] !== ls[1])) smoothed.push(tip);
+    eKeyPath.setAttribute('d', buildSmoothPath(smoothed));
+    redoStack.length = 0;
+    undoStack.push({ type: 'stroke', el: eKeyGroup });
+    updateHint();
+  } else if (eKeyGroup && eKeyPoints.length < 3) {
+    removeStrokeFromDOM(eKeyGroup);
+  }
+  eKeyWriting = false;
+  eKeyGroup = null;
+  eKeyPath = null;
+  eKeyHitPath = null;
+  eKeyPoints = [];
+  eKeyLastMoveTime = 0;
+  eKeyAutoAdvanceX = 0;
+  eKeyCurrentOffsetX = 0;
+  eKeyCurrentOffsetY = 0;
+  eKeyWordBaseY = 0;
+  eKeyWordActive = false;
+  eKeyLastStrokeEndTime = 0;
+  document.getElementById('ekey-cursor').style.display = 'none';
+  document.body.classList.remove('writing');
 });
 
 document.addEventListener('keyup', function (e) {
